@@ -246,6 +246,10 @@ bool PmxWriter::writeToBuffer(const PmxDocument& document,
 
     // 2. Version
     const float versionToWrite = (std::abs(hdr.version - 2.1f) <= 1e-6f) ? 2.1f : 2.0f;
+    if (versionToWrite < 2.1f && !document.softBodies.empty()) {
+        setError(errorMessage, QStringLiteral("SoftBody records require PMX 2.1"));
+        return false;
+    }
     writeFloat(buf, versionToWrite);
 
     // 3. Globals
@@ -291,7 +295,20 @@ bool PmxWriter::writeToBuffer(const PmxDocument& document,
             writeFloat(buf, v.boneWeights[0]);
             break;
         case WeightType::BDEF4:
+            for (int b = 0; b < 4; ++b) {
+                if (!writeNonVertexIndex(buf, v.boneIndices[b], boneIdxSize, errorMessage)) {
+                    return false;
+                }
+            }
+            for (int b = 0; b < 4; ++b) {
+                writeFloat(buf, v.boneWeights[b]);
+            }
+            break;
         case WeightType::QDEF:
+            if (versionToWrite < 2.1f) {
+                setError(errorMessage, QStringLiteral("QDEF vertex weight type requires PMX 2.1"));
+                return false;
+            }
             for (int b = 0; b < 4; ++b) {
                 if (!writeNonVertexIndex(buf, v.boneIndices[b], boneIdxSize, errorMessage)) {
                     return false;
@@ -311,6 +328,9 @@ bool PmxWriter::writeToBuffer(const PmxDocument& document,
             writeVec3(buf, v.sdefR0);
             writeVec3(buf, v.sdefR1);
             break;
+        default:
+            setError(errorMessage, QStringLiteral("Invalid vertex weightType: %1").arg(static_cast<uint8_t>(v.weightType)));
+            return false;
         }
         writeFloat(buf, v.edgeScale);
     }
@@ -349,6 +369,10 @@ bool PmxWriter::writeToBuffer(const PmxDocument& document,
             !writeNonVertexIndex(buf, m.sphereTextureIndex, textureIdxSize, errorMessage)) {
             return false;
         }
+        if (m.sphereMode > 3) {
+            setError(errorMessage, QStringLiteral("Invalid material sphereMode: %1").arg(m.sphereMode));
+            return false;
+        }
         writeU8(buf, m.sphereMode);
         writeU8(buf, m.sharedToonFlag);
         if (m.sharedToonFlag == 0) {
@@ -364,6 +388,10 @@ bool PmxWriter::writeToBuffer(const PmxDocument& document,
             return false;
         }
         if (!writeText(buf, m.memo, hdr.textEncoding, errorMessage)) {
+            return false;
+        }
+        if (m.faceVertexCount < 0 || (m.faceVertexCount % 3) != 0) {
+            setError(errorMessage, QStringLiteral("Invalid material faceVertexCount: %1 (must be non-negative multiple of 3)").arg(m.faceVertexCount));
             return false;
         }
         writeI32(buf, m.faceVertexCount);
@@ -439,6 +467,14 @@ bool PmxWriter::writeToBuffer(const PmxDocument& document,
             return false;
         }
         writeU8(buf, m.panelCategory);
+        if (m.morphType > 10) {
+            setError(errorMessage, QStringLiteral("Invalid morphType: %1").arg(m.morphType));
+            return false;
+        }
+        if ((m.morphType == 9 || m.morphType == 10) && versionToWrite < 2.1f) {
+            setError(errorMessage, QStringLiteral("PMX 2.1 required for morphType: %1").arg(m.morphType));
+            return false;
+        }
         writeU8(buf, m.morphType);
 
         switch (m.morphType) {

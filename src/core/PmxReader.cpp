@@ -109,6 +109,25 @@ bool isValidIndexSize(uint8_t size) {
     return size == 1 || size == 2 || size == 4;
 }
 
+bool checkCountBounds(int32_t count, size_t minWireBytes, size_t remainingBytes,
+                      const char* sectionName, QString* errorMessage) {
+    if (count < 0) {
+        setError(errorMessage,
+                 QStringLiteral("Negative count for %1: %2").arg(QString::fromUtf8(sectionName)).arg(count));
+        return false;
+    }
+    if (minWireBytes > 0 && static_cast<size_t>(count) > (remainingBytes / minWireBytes)) {
+        setError(errorMessage,
+                 QStringLiteral("Count %1 for %2 exceeds remaining buffer bytes (%3, min record wire size %4)")
+                     .arg(count)
+                     .arg(QString::fromUtf8(sectionName))
+                     .arg(remainingBytes)
+                     .arg(minWireBytes));
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 bool PmxReader::readVertexIndex(std::span<const uint8_t> buffer,
@@ -352,8 +371,11 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
 
     // 5. Vertex Table
     int32_t vertexCount = 0;
-    if (!readI32(buffer, offset, vertexCount, errorMessage) || vertexCount < 0) {
-        setError(errorMessage, QStringLiteral("Invalid or missing vertexCount"));
+    if (!readI32(buffer, offset, vertexCount, errorMessage)) {
+        return false;
+    }
+    const size_t minVertexWireBytes = 37 + static_cast<size_t>(doc.header.additionalVec4Count) * 16 + doc.header.boneIndexSize;
+    if (!checkCountBounds(vertexCount, minVertexWireBytes, buffer.size() - offset, "vertices", errorMessage)) {
         return false;
     }
     doc.vertices.resize(static_cast<size_t>(vertexCount));
@@ -425,8 +447,14 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
 
     // 6. Face Index Table
     int32_t faceVertexCount = 0;
-    if (!readI32(buffer, offset, faceVertexCount, errorMessage) || faceVertexCount < 0 || (faceVertexCount % 3) != 0) {
-        setError(errorMessage, QStringLiteral("Invalid or missing faceVertexCount"));
+    if (!readI32(buffer, offset, faceVertexCount, errorMessage)) {
+        return false;
+    }
+    if (faceVertexCount < 0 || (faceVertexCount % 3) != 0) {
+        setError(errorMessage, QStringLiteral("Invalid faceVertexCount: %1 (must be non-negative multiple of 3)").arg(faceVertexCount));
+        return false;
+    }
+    if (!checkCountBounds(faceVertexCount, doc.header.vertexIndexSize, buffer.size() - offset, "faceIndices", errorMessage)) {
         return false;
     }
     doc.faceIndices.resize(static_cast<size_t>(faceVertexCount));
@@ -438,8 +466,10 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
 
     // 7. Texture Table
     int32_t textureCount = 0;
-    if (!readI32(buffer, offset, textureCount, errorMessage) || textureCount < 0) {
-        setError(errorMessage, QStringLiteral("Invalid or missing textureCount"));
+    if (!readI32(buffer, offset, textureCount, errorMessage)) {
+        return false;
+    }
+    if (!checkCountBounds(textureCount, 4, buffer.size() - offset, "textures", errorMessage)) {
         return false;
     }
     doc.textures.resize(static_cast<size_t>(textureCount));
@@ -451,8 +481,14 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
 
     // 8. Material Table
     int32_t materialCount = 0;
-    if (!readI32(buffer, offset, materialCount, errorMessage) || materialCount < 0) {
-        setError(errorMessage, QStringLiteral("Invalid or missing materialCount"));
+    if (!readI32(buffer, offset, materialCount, errorMessage)) {
+        return false;
+    }
+    const size_t minMaterialWireBytes = 4 + 4 + 16 + 12 + 4 + 12 + 1 + 16 + 4
+                                      + static_cast<size_t>(doc.header.textureIndexSize)
+                                      + static_cast<size_t>(doc.header.textureIndexSize)
+                                      + 1 + 1 + 1 + 4 + 4;
+    if (!checkCountBounds(materialCount, minMaterialWireBytes, buffer.size() - offset, "materials", errorMessage)) {
         return false;
     }
     doc.materials.resize(static_cast<size_t>(materialCount));
@@ -469,8 +505,14 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
             !readFloat(buffer, offset, m.edgeSize, errorMessage) ||
             !readNonVertexIndex(buffer, offset, doc.header.textureIndexSize, m.textureIndex, errorMessage) ||
             !readNonVertexIndex(buffer, offset, doc.header.textureIndexSize, m.sphereTextureIndex, errorMessage) ||
-            !readU8(buffer, offset, m.sphereMode, errorMessage) ||
-            !readU8(buffer, offset, m.sharedToonFlag, errorMessage)) {
+            !readU8(buffer, offset, m.sphereMode, errorMessage)) {
+            return false;
+        }
+        if (m.sphereMode > 3) {
+            setError(errorMessage, QStringLiteral("Invalid material sphereMode: %1").arg(m.sphereMode));
+            return false;
+        }
+        if (!readU8(buffer, offset, m.sharedToonFlag, errorMessage)) {
             return false;
         }
         if (m.sharedToonFlag == 0) {
@@ -488,16 +530,23 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
             return false;
         }
         if (!readText(buffer, offset, doc.header.textEncoding, m.memo, errorMessage) ||
-            !readI32(buffer, offset, m.faceVertexCount, errorMessage) ||
-            m.faceVertexCount < 0) {
+            !readI32(buffer, offset, m.faceVertexCount, errorMessage)) {
+            return false;
+        }
+        if (m.faceVertexCount < 0 || (m.faceVertexCount % 3) != 0) {
+            setError(errorMessage, QStringLiteral("Invalid material faceVertexCount: %1 (must be non-negative multiple of 3)").arg(m.faceVertexCount));
             return false;
         }
     }
 
     // 9. Bone Table
     int32_t boneCount = 0;
-    if (!readI32(buffer, offset, boneCount, errorMessage) || boneCount < 0) {
-        setError(errorMessage, QStringLiteral("Invalid or missing boneCount"));
+    if (!readI32(buffer, offset, boneCount, errorMessage)) {
+        return false;
+    }
+    const size_t minBoneWireBytes = 4 + 4 + 12 + static_cast<size_t>(doc.header.boneIndexSize) + 4 + 2
+                                  + std::min<size_t>(sizeof(glm::vec3), doc.header.boneIndexSize);
+    if (!checkCountBounds(boneCount, minBoneWireBytes, buffer.size() - offset, "bones", errorMessage)) {
         return false;
     }
     doc.bones.resize(static_cast<size_t>(boneCount));
@@ -553,8 +602,11 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
             if (!readNonVertexIndex(buffer, offset, doc.header.boneIndexSize, b.ikTargetBoneIndex, errorMessage) ||
                 !readI32(buffer, offset, b.ikLoopCount, errorMessage) ||
                 !readFloat(buffer, offset, b.ikLimitAngle, errorMessage) ||
-                !readI32(buffer, offset, ikLinkCount, errorMessage) ||
-                ikLinkCount < 0) {
+                !readI32(buffer, offset, ikLinkCount, errorMessage)) {
+                return false;
+            }
+            const size_t minIkLinkWireBytes = static_cast<size_t>(doc.header.boneIndexSize) + 1;
+            if (!checkCountBounds(ikLinkCount, minIkLinkWireBytes, buffer.size() - offset, "ikLinks", errorMessage)) {
                 return false;
             }
             b.ikLinks.resize(static_cast<size_t>(ikLinkCount));
@@ -576,8 +628,11 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
 
     // 10. Morph Table
     int32_t morphCount = 0;
-    if (!readI32(buffer, offset, morphCount, errorMessage) || morphCount < 0) {
-        setError(errorMessage, QStringLiteral("Invalid or missing morphCount"));
+    if (!readI32(buffer, offset, morphCount, errorMessage)) {
+        return false;
+    }
+    const size_t minMorphWireBytes = 4 + 4 + 1 + 1 + 4;
+    if (!checkCountBounds(morphCount, minMorphWireBytes, buffer.size() - offset, "morphs", errorMessage)) {
         return false;
     }
     doc.morphs.resize(static_cast<size_t>(morphCount));
@@ -588,14 +643,26 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
             !readText(buffer, offset, doc.header.textEncoding, m.nameEn, errorMessage) ||
             !readU8(buffer, offset, m.panelCategory, errorMessage) ||
             !readU8(buffer, offset, m.morphType, errorMessage) ||
-            !readI32(buffer, offset, offsetCount, errorMessage) ||
-            offsetCount < 0) {
+            !readI32(buffer, offset, offsetCount, errorMessage)) {
+            return false;
+        }
+
+        if (m.morphType > 10) {
+            setError(errorMessage, QStringLiteral("Invalid morphType: %1").arg(m.morphType));
+            return false;
+        }
+        if ((m.morphType == 9 || m.morphType == 10) && doc.header.version < 2.1f) {
+            setError(errorMessage, QStringLiteral("PMX 2.1 required for morphType: %1").arg(m.morphType));
             return false;
         }
 
         switch (m.morphType) {
         case 0: // Group
-        case 9: // Flip (2.1)
+        case 9: { // Flip (2.1)
+            const size_t minOffBytes = static_cast<size_t>(doc.header.morphIndexSize) + sizeof(float);
+            if (!checkCountBounds(offsetCount, minOffBytes, buffer.size() - offset, "groupOffsets", errorMessage)) {
+                return false;
+            }
             m.groupOffsets.resize(static_cast<size_t>(offsetCount));
             for (int32_t j = 0; j < offsetCount; ++j) {
                 GroupMorphOffset& off = m.groupOffsets[static_cast<size_t>(j)];
@@ -605,7 +672,12 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
                 }
             }
             break;
-        case 1: // Vertex
+        }
+        case 1: { // Vertex
+            const size_t minOffBytes = static_cast<size_t>(doc.header.vertexIndexSize) + sizeof(glm::vec3);
+            if (!checkCountBounds(offsetCount, minOffBytes, buffer.size() - offset, "vertexOffsets", errorMessage)) {
+                return false;
+            }
             m.vertexOffsets.resize(static_cast<size_t>(offsetCount));
             for (int32_t j = 0; j < offsetCount; ++j) {
                 VertexMorphOffset& off = m.vertexOffsets[static_cast<size_t>(j)];
@@ -615,7 +687,12 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
                 }
             }
             break;
-        case 2: // Bone
+        }
+        case 2: { // Bone
+            const size_t minOffBytes = static_cast<size_t>(doc.header.boneIndexSize) + sizeof(glm::vec3) + sizeof(glm::vec4);
+            if (!checkCountBounds(offsetCount, minOffBytes, buffer.size() - offset, "boneOffsets", errorMessage)) {
+                return false;
+            }
             m.boneOffsets.resize(static_cast<size_t>(offsetCount));
             for (int32_t j = 0; j < offsetCount; ++j) {
                 BoneMorphOffset& off = m.boneOffsets[static_cast<size_t>(j)];
@@ -631,11 +708,16 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
                 off.rotation.w = q.w;
             }
             break;
+        }
         case 3:
         case 4:
         case 5:
         case 6:
-        case 7: // UV / AdditionalUV1..4
+        case 7: { // UV / AdditionalUV1..4
+            const size_t minOffBytes = static_cast<size_t>(doc.header.vertexIndexSize) + sizeof(glm::vec4);
+            if (!checkCountBounds(offsetCount, minOffBytes, buffer.size() - offset, "uvOffsets", errorMessage)) {
+                return false;
+            }
             m.uvOffsets.resize(static_cast<size_t>(offsetCount));
             for (int32_t j = 0; j < offsetCount; ++j) {
                 UvMorphOffset& off = m.uvOffsets[static_cast<size_t>(j)];
@@ -645,7 +727,12 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
                 }
             }
             break;
-        case 8: // Material
+        }
+        case 8: { // Material
+            const size_t minOffBytes = static_cast<size_t>(doc.header.materialIndexSize) + 1 + 28 * sizeof(float);
+            if (!checkCountBounds(offsetCount, minOffBytes, buffer.size() - offset, "materialOffsets", errorMessage)) {
+                return false;
+            }
             m.materialOffsets.resize(static_cast<size_t>(offsetCount));
             for (int32_t j = 0; j < offsetCount; ++j) {
                 MaterialMorphOffset& off = m.materialOffsets[static_cast<size_t>(j)];
@@ -664,7 +751,12 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
                 }
             }
             break;
-        case 10: // Impulse (2.1)
+        }
+        case 10: { // Impulse (2.1)
+            const size_t minOffBytes = static_cast<size_t>(doc.header.rigidBodyIndexSize) + 1 + 2 * sizeof(glm::vec3);
+            if (!checkCountBounds(offsetCount, minOffBytes, buffer.size() - offset, "impulseOffsets", errorMessage)) {
+                return false;
+            }
             m.impulseOffsets.resize(static_cast<size_t>(offsetCount));
             for (int32_t j = 0; j < offsetCount; ++j) {
                 ImpulseMorphOffset& off = m.impulseOffsets[static_cast<size_t>(j)];
@@ -676,6 +768,7 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
                 }
             }
             break;
+        }
         default:
             setError(errorMessage, QStringLiteral("Invalid morphType: %1").arg(m.morphType));
             return false;
@@ -684,8 +777,11 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
 
     // 11. Display Frame Table
     int32_t displayFrameCount = 0;
-    if (!readI32(buffer, offset, displayFrameCount, errorMessage) || displayFrameCount < 0) {
-        setError(errorMessage, QStringLiteral("Invalid or missing displayFrameCount"));
+    if (!readI32(buffer, offset, displayFrameCount, errorMessage)) {
+        return false;
+    }
+    const size_t minDisplayFrameWireBytes = 4 + 4 + 1 + 4;
+    if (!checkCountBounds(displayFrameCount, minDisplayFrameWireBytes, buffer.size() - offset, "displayFrames", errorMessage)) {
         return false;
     }
     doc.displayFrames.resize(static_cast<size_t>(displayFrameCount));
@@ -695,8 +791,11 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
         if (!readText(buffer, offset, doc.header.textEncoding, df.nameJp, errorMessage) ||
             !readText(buffer, offset, doc.header.textEncoding, df.nameEn, errorMessage) ||
             !readU8(buffer, offset, df.specialFlag, errorMessage) ||
-            !readI32(buffer, offset, elementCount, errorMessage) ||
-            elementCount < 0) {
+            !readI32(buffer, offset, elementCount, errorMessage)) {
+            return false;
+        }
+        const size_t minElementWireBytes = 1 + std::min(doc.header.boneIndexSize, doc.header.morphIndexSize);
+        if (!checkCountBounds(elementCount, minElementWireBytes, buffer.size() - offset, "displayElements", errorMessage)) {
             return false;
         }
         df.elements.resize(static_cast<size_t>(elementCount));
@@ -722,8 +821,11 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
 
     // 12. Rigid Body Table
     int32_t rigidBodyCount = 0;
-    if (!readI32(buffer, offset, rigidBodyCount, errorMessage) || rigidBodyCount < 0) {
-        setError(errorMessage, QStringLiteral("Invalid or missing rigidBodyCount"));
+    if (!readI32(buffer, offset, rigidBodyCount, errorMessage)) {
+        return false;
+    }
+    const size_t minRigidBodyWireBytes = 4 + 4 + static_cast<size_t>(doc.header.boneIndexSize) + 1 + 2 + 1 + 12 + 12 + 12 + 4 + 4 + 4 + 4 + 4 + 1;
+    if (!checkCountBounds(rigidBodyCount, minRigidBodyWireBytes, buffer.size() - offset, "rigidBodies", errorMessage)) {
         return false;
     }
     doc.rigidBodies.resize(static_cast<size_t>(rigidBodyCount));
@@ -750,8 +852,11 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
 
     // 13. Joint Table
     int32_t jointCount = 0;
-    if (!readI32(buffer, offset, jointCount, errorMessage) || jointCount < 0) {
-        setError(errorMessage, QStringLiteral("Invalid or missing jointCount"));
+    if (!readI32(buffer, offset, jointCount, errorMessage)) {
+        return false;
+    }
+    const size_t minJointWireBytes = 4 + 4 + 1 + 2 * static_cast<size_t>(doc.header.rigidBodyIndexSize) + 96;
+    if (!checkCountBounds(jointCount, minJointWireBytes, buffer.size() - offset, "joints", errorMessage)) {
         return false;
     }
     doc.joints.resize(static_cast<size_t>(jointCount));
@@ -777,8 +882,12 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
     // 14. SoftBody Table (PMX 2.1 only)
     if (doc.header.version >= 2.1f) {
         int32_t softBodyCount = 0;
-        if (!readI32(buffer, offset, softBodyCount, errorMessage) || softBodyCount < 0) {
-            setError(errorMessage, QStringLiteral("Invalid or missing softBodyCount in PMX 2.1 stream"));
+        if (!readI32(buffer, offset, softBodyCount, errorMessage)) {
+            return false;
+        }
+        const size_t minSoftBodyWireBytes = 4 + 4 + 1 + static_cast<size_t>(doc.header.materialIndexSize)
+                                          + 1 + 2 + 1 + 4 + 4 + 4 + 4 + 4 + 48 + 24 + 16 + 12 + 4 + 4;
+        if (!checkCountBounds(softBodyCount, minSoftBodyWireBytes, buffer.size() - offset, "softBodies", errorMessage)) {
             return false;
         }
         doc.softBodies.resize(static_cast<size_t>(softBodyCount));
@@ -819,7 +928,11 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
                 }
             }
             int32_t anchorCount = 0;
-            if (!readI32(buffer, offset, anchorCount, errorMessage) || anchorCount < 0) {
+            if (!readI32(buffer, offset, anchorCount, errorMessage)) {
+                return false;
+            }
+            const size_t minAnchorWireBytes = static_cast<size_t>(doc.header.rigidBodyIndexSize) + static_cast<size_t>(doc.header.vertexIndexSize) + 1;
+            if (!checkCountBounds(anchorCount, minAnchorWireBytes, buffer.size() - offset, "softBodyAnchors", errorMessage)) {
                 return false;
             }
             sb.anchors.resize(static_cast<size_t>(anchorCount));
@@ -832,7 +945,11 @@ bool PmxReader::readFromBuffer(std::span<const uint8_t> buffer,
                 }
             }
             int32_t pinCount = 0;
-            if (!readI32(buffer, offset, pinCount, errorMessage) || pinCount < 0) {
+            if (!readI32(buffer, offset, pinCount, errorMessage)) {
+                return false;
+            }
+            const size_t minPinWireBytes = static_cast<size_t>(doc.header.vertexIndexSize);
+            if (!checkCountBounds(pinCount, minPinWireBytes, buffer.size() - offset, "softBodyPins", errorMessage)) {
                 return false;
             }
             sb.pinVertexIndices.resize(static_cast<size_t>(pinCount));
