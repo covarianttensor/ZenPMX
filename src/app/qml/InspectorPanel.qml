@@ -100,7 +100,6 @@ Item {
                     placeholderText: tabBar.isJp ? "絞り込み (部分一致 / 正規表現)..." : "Filter (substring / regex)..."
                     font.pixelSize: 11
                     selectByMouse: true
-                    clearButtonShown: true
                 }
 
                 Button {
