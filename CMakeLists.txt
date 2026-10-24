@@ -26,7 +26,13 @@ if(PMX_ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_link_options(-fsanitize=address,undefined)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Test)
+set(QT_NO_PRIVATE_MODULE_WARNING ON)
+if(COMMAND qt_policy)
+    qt_policy(SET QTP0001 NEW)
+    qt_policy(SET QTP0004 NEW)
+endif()
+
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Test GuiPrivate ShaderTools)
 
 find_package(glm QUIET)
 if(NOT TARGET glm::glm)
@@ -88,6 +94,67 @@ target_link_libraries(PmxModels PUBLIC
     Qt6::Gui
 )
 
+add_library(PmxViewport STATIC
+    src/viewport/PmxCamera.h
+    src/viewport/PmxCamera.cpp
+    src/viewport/PmxViewportItem.h
+    src/viewport/PmxViewportItem.cpp
+)
+
+target_include_directories(PmxViewport PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/viewport"
+)
+
+target_link_libraries(PmxViewport PUBLIC
+    PmxCore
+    PmxModels
+    Qt6::Core
+    Qt6::Gui
+    Qt6::GuiPrivate
+    Qt6::Quick
+)
+
+qt_add_shaders(PmxViewport "pmx_shaders"
+    PREFIX
+        "/shaders"
+    FILES
+        src/viewport/shaders/mesh.vert
+        src/viewport/shaders/mesh.frag
+        src/viewport/shaders/lines.vert
+        src/viewport/shaders/lines.frag
+)
+
+add_executable(pmx-editor
+    src/app/main.cpp
+    src/app/PmxAppBridge.h
+    src/app/PmxAppBridge.cpp
+)
+
+target_include_directories(pmx-editor PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/app"
+)
+
+if(COMMAND qt_policy)
+    qt_policy(SET QTP0004 NEW)
+endif()
+
+qt_add_qml_module(pmx-editor
+    URI PmxEditorApp
+    VERSION 1.0
+    RESOURCE_PREFIX "/qt/qml"
+    QML_FILES
+        src/app/qml/Main.qml
+)
+
+target_link_libraries(pmx-editor PRIVATE
+    PmxViewport
+    PmxModels
+    PmxCore
+    Qt6::QuickControls2
+)
+
 enable_testing()
 
 add_executable(tst_pmx_roundtrip
@@ -119,4 +186,23 @@ target_link_libraries(tst_pmx_undo_models PRIVATE
 )
 
 add_test(NAME tst_pmx_undo_models COMMAND tst_pmx_undo_models)
+
+add_executable(tst_pmx_viewport
+    tests/tst_pmx_viewport.cpp
+)
+
+set_target_properties(tst_pmx_viewport PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
+)
+
+target_link_libraries(tst_pmx_viewport PRIVATE
+    PmxViewport
+    PmxModels
+    PmxCore
+    Qt6::Test
+    Qt6::Quick
+)
+
+add_test(NAME tst_pmx_viewport COMMAND tst_pmx_viewport)
+
 
