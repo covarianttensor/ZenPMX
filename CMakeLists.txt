@@ -26,7 +26,7 @@ if(PMX_ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_link_options(-fsanitize=address,undefined)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Test)
 
 find_package(glm QUIET)
 if(NOT TARGET glm::glm)
@@ -62,6 +62,32 @@ target_link_libraries(PmxCore PUBLIC
     glm::glm
 )
 
+add_library(PmxModels STATIC
+    src/models/PmxSelectionManager.h
+    src/models/PmxSelectionManager.cpp
+    src/models/PmxUndoCommands.h
+    src/models/PmxUndoCommands.cpp
+    src/models/PmxDocumentController.h
+    src/models/PmxDocumentController.cpp
+    src/models/PmxInfoModel.h
+    src/models/PmxInfoModel.cpp
+    src/models/PmxMaterialTableModel.h
+    src/models/PmxMaterialTableModel.cpp
+    src/models/PmxBoneTableModel.h
+    src/models/PmxBoneTableModel.cpp
+)
+
+target_include_directories(PmxModels PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/models"
+)
+
+target_link_libraries(PmxModels PUBLIC
+    PmxCore
+    Qt6::Core
+    Qt6::Gui
+)
+
 enable_testing()
 
 add_executable(tst_pmx_roundtrip
@@ -78,3 +104,19 @@ target_link_libraries(tst_pmx_roundtrip PRIVATE
 )
 
 add_test(NAME tst_pmx_roundtrip COMMAND tst_pmx_roundtrip)
+
+add_executable(tst_pmx_undo_models
+    tests/tst_pmx_undo_models.cpp
+)
+
+set_target_properties(tst_pmx_undo_models PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
+)
+
+target_link_libraries(tst_pmx_undo_models PRIVATE
+    PmxModels
+    Qt6::Test
+)
+
+add_test(NAME tst_pmx_undo_models COMMAND tst_pmx_undo_models)
+
