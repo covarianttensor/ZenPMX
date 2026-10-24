@@ -128,6 +128,8 @@ target_link_libraries(PmxViewport PUBLIC
 qt_add_shaders(PmxViewport "pmx_shaders"
     PREFIX
         "/shaders"
+    BASE
+        "src/viewport/shaders"
     FILES
         src/viewport/shaders/mesh.vert
         src/viewport/shaders/mesh.frag

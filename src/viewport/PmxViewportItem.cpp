@@ -4,9 +4,14 @@
 #include <QMatrix4x4>
 #include <cstring>
 
+inline void initShaders() {
+    Q_INIT_RESOURCE(pmx_shaders);
+}
+
 namespace pmx {
 
 static QShader loadShaderFromResource(const QString& name) {
+    initShaders();
     QFile f(name);
     if (!f.open(QIODevice::ReadOnly)) {
         qWarning() << "Failed to load shader resource:" << name;
@@ -256,7 +261,8 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
         }
     }
 
-    const float* corrData = rhi()->clipSpaceCorrMatrix().constData();
+    QMatrix4x4 corr = rhi()->clipSpaceCorrMatrix();
+    const float* corrData = corr.constData();
     glm::mat4 corrMat;
     std::memcpy(&corrMat[0][0], corrData, 16 * sizeof(float));
     glm::mat4 mvp = corrMat * m_projMatrix * m_viewMatrix;
@@ -315,6 +321,7 @@ PmxViewportItem::PmxViewportItem(QQuickItem* parent)
     : QQuickRhiItem(parent)
     , m_camera(new PmxCamera(this))
 {
+    initShaders();
     setAcceptedMouseButtons(Qt::AllButtons);
     setAcceptHoverEvents(true);
 

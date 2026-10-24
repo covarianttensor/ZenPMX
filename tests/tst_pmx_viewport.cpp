@@ -15,6 +15,7 @@
 #include <QSignalSpy>
 #include <QTest>
 #include <QUndoCommand>
+#include <QFile>
 #include <cmath>
 #include <limits>
 
@@ -36,6 +37,7 @@ private slots:
     void testAppBridgeBatchOperation();
     void testAppBridgeBatchOperationBoundaries();
     void testAppBridgeLanguageToggle();
+    void testShaderResourcesLoaded();
 };
 
 void tst_pmx_viewport::testCameraDefaults() {
@@ -547,6 +549,18 @@ void tst_pmx_viewport::testAppBridgeLanguageToggle() {
     bridge.toggleLanguage();
     QCOMPARE(bridge.displayLanguage(), QStringLiteral("Japanese"));
     QCOMPARE(spy.count(), 2);
+}
+
+void tst_pmx_viewport::testShaderResourcesLoaded() {
+    PmxViewportItem item;
+    QVERIFY(QFile::exists(QStringLiteral(":/shaders/mesh.vert.qsb")));
+    QVERIFY(QFile::exists(QStringLiteral(":/shaders/mesh.frag.qsb")));
+    QVERIFY(QFile::exists(QStringLiteral(":/shaders/lines.vert.qsb")));
+    QVERIFY(QFile::exists(QStringLiteral(":/shaders/lines.frag.qsb")));
+
+    QFile vertFile(QStringLiteral(":/shaders/mesh.vert.qsb"));
+    QVERIFY(vertFile.open(QIODevice::ReadOnly));
+    QVERIFY(vertFile.size() > 0);
 }
 
 QTEST_MAIN(tst_pmx_viewport)
