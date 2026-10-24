@@ -56,6 +56,8 @@ add_library(PmxCore STATIC
     src/core/PmxReader.cpp
     src/core/PmxWriter.h
     src/core/PmxWriter.cpp
+    src/core/PmdImporter.h
+    src/core/PmdImporter.cpp
 )
 
 target_include_directories(PmxCore PUBLIC
@@ -277,4 +279,17 @@ target_link_libraries(tst_pmx_mcp PRIVATE
 
 add_test(NAME tst_pmx_mcp COMMAND tst_pmx_mcp)
 
+add_executable(tst_pmd_import
+    tests/tst_pmd_import.cpp
+)
 
+set_target_properties(tst_pmd_import PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
+)
+
+target_link_libraries(tst_pmd_import PRIVATE
+    PmxCore
+    Qt6::Test
+)
+
+add_test(NAME tst_pmd_import COMMAND tst_pmd_import)
