@@ -1,0 +1,80 @@
+cmake_minimum_required(VERSION 3.24)
+
+if(CMAKE_GENERATOR STREQUAL "Ninja" AND NOT CMAKE_MAKE_PROGRAM)
+    find_program(PMX_NINJA_EXECUTABLE
+        NAMES ninja ninja-build
+        PATHS
+            "/home/oscarc/.local/bin"
+            "/home/oscarc/.local/share/flatpak/runtime/org.kde.Sdk/x86_64/6.11/305b8ec8d506448558798256bd9afcfd856c7e62357a42e320a6678a08f81465/files/bin"
+            "/home/oscarc/.local/share/flatpak/runtime/org.freedesktop.Sdk/x86_64/26.08/3311c13c67b602315c39cf5310de129dd3460d04b6c8cf5be1b2cbc42c51abd7/files/bin"
+    )
+    if(PMX_NINJA_EXECUTABLE)
+        set(CMAKE_MAKE_PROGRAM "${PMX_NINJA_EXECUTABLE}" CACHE FILEPATH "Ninja build program" FORCE)
+    endif()
+endif()
+
+project(PmxEditor VERSION 1.0.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_AUTOMOC ON)
+
+option(PMX_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer in Debug builds" ON)
+if(PMX_ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
+find_package(Qt6 REQUIRED COMPONENTS Core Test)
+
+find_package(glm QUIET)
+if(NOT TARGET glm::glm)
+    if(TARGET glm)
+        add_library(glm::glm ALIAS glm)
+    else()
+        find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp)
+        if(NOT GLM_INCLUDE_DIR)
+            message(FATAL_ERROR "glm headers (glm/glm.hpp) not found")
+        endif()
+        add_library(glm_headers INTERFACE)
+        target_include_directories(glm_headers INTERFACE "${GLM_INCLUDE_DIR}")
+        add_library(glm::glm ALIAS glm_headers)
+    endif()
+endif()
+
+add_library(PmxCore STATIC
+    src/core/PmxTypes.h
+    src/core/PmxDocument.h
+    src/core/PmxReader.h
+    src/core/PmxReader.cpp
+    src/core/PmxWriter.h
+    src/core/PmxWriter.cpp
+)
+
+target_include_directories(PmxCore PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core"
+)
+
+target_link_libraries(PmxCore PUBLIC
+    Qt6::Core
+    glm::glm
+)
+
+enable_testing()
+
+add_executable(tst_pmx_roundtrip
+    tests/tst_pmx_roundtrip.cpp
+)
+
+set_target_properties(tst_pmx_roundtrip PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
+)
+
+target_link_libraries(tst_pmx_roundtrip PRIVATE
+    PmxCore
+    Qt6::Test
+)
+
+add_test(NAME tst_pmx_roundtrip COMMAND tst_pmx_roundtrip)
