@@ -9,9 +9,11 @@
 
 ```text
 ================================================================================
-[██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 25% COMPLETE
+[████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 30% COMPLETE
 ================================================================================
-Status: Milestone 1 (The Tracer Bullet) VERIFIED & TAGGED (v0.1.0-milestone1)
+Project: ZenPMX (Native Linux PMX Editor)
+Repository: https://github.com/covarianttensor/ZenPMX (Public)
+Status: Milestone 1 (The Tracer Bullet) VERIFIED & PUSHED (v0.1.0-milestone1)
 Active Phase: Milestone 2 (Complete 8-Tab Spreadsheet Inspector & Kitbash Merger)
 ```
 
@@ -22,7 +24,7 @@ Active Phase: Milestone 2 (Complete 8-Tab Spreadsheet Inspector & Kitbash Merger
 | Milestone ID | Title | Est. Tickets | Status | Gate Verdict | Release Tag |
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | **Milestone 1** | **The Tracer Bullet (End-to-End Pipeline)** | 5 | `[DONE]` | **PASS** | `v0.1.0-milestone1` |
-| **Milestone 2** | **Complete 8-Tab Spreadsheet Inspector & Kitbash Merger** | 5 | `[TODO]` | Pending | `v0.2.0-milestone2` |
+| **Milestone 2** | **Complete 8-Tab Spreadsheet Inspector & Kitbash Merger** | 5 | `[IN_PROGRESS]` | Pending | `v0.2.0-milestone2` |
 | **Milestone 3** | **Full MMD Shader Pipeline & Interactive 3D Edit Mode** | 5 | `[TODO]` | Pending | `v0.3.0-milestone3` |
 | **Milestone 4** | **Live TransformView (CCDIK, SDEF & Bullet3 Physics)** | 5 | `[TODO]` | Pending | `v0.4.0-milestone4` |
 | **Milestone 5** | **The Top 8 Native C++ Community Power Tools** | 5 | `[TODO]` | Pending | `v0.5.0-milestone5` |
@@ -47,10 +49,10 @@ Active Phase: Milestone 2 (Complete 8-Tab Spreadsheet Inspector & Kitbash Merger
 ### Overview & Objective
 Scale out the spreadsheet data engineering capabilities to all 8 canonical PMX tabs with high-performance virtualization (100,000+ vertices), multi-format import (`.pmd`, `.obj`, `.fbx`, `.gltf`), and non-destructive kitbash merging (`追加選択`) with index remapping.
 
-| Ticket ID | Title | Target Subsystem | Assigned Subagent | Status | Dependencies |
-| :--- | :--- | :--- | :--- | :---: | :--- |
-| **Ticket 2.1** | **Remaining 5 Table Models (Vertex, Morph, Display, RigidBody, Joint)** | `PmxModels` | `pmx_core_engineer` | `[TODO]` | Ticket 1.3 |
-| **Ticket 2.2** | **Spreadsheet UI Completion: 8 QML Tabs, Multi-Select & Search/Filter** | `PmxModels` / `pmx-editor` | `pmx_ui_engineer` | `[TODO]` | Ticket 2.1 |
+| Ticket ID | Title | Target Subsystem | Assigned Subagent | Status | Dependencies | Commit |
+| :--- | :--- | :--- | :--- | :---: | :--- | :---: |
+| **Ticket 2.1** | **Remaining 5 Table Models (Vertex, Morph, Display, RigidBody, Joint)** | `PmxModels` | `pmx_core_engineer` | `[DONE]` | Ticket 1.3 | `9079cf6` |
+| **Ticket 2.2** | **Spreadsheet UI Completion: 8 QML Tabs, Multi-Select & Search/Filter** | `PmxModels` / `pmx-editor` | `pmx_ui_engineer` | `[TODO]` | Ticket 2.1 | Pending |
 | **Ticket 2.3** | **Legacy PMD Binary Importer (`PmdImporter.cpp`)** | `PmxCore` | `pmx_core_engineer` | `[TODO]` | Ticket 1.2 |
 | **Ticket 2.4** | **Kitbash Merger Engine (`PmxMerger.cpp` — 追加選択)** | `PmxCore` / `PmxModels` | `pmx_core_engineer` | `[TODO]` | Ticket 2.1, Ticket 2.3 |
 | **Ticket 2.5** | **Assimp Accessory Importer (`AssimpImporter.cpp`)** | `PmxCore` | `pmx_core_engineer` | `[TODO]` | Ticket 2.4 |

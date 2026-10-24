@@ -117,3 +117,37 @@
   - Wrap `std::stoi` in `try-catch` with $[0, 64\text{MB}]$ bounds checking.
   - Add `testUafLifetimeAfterServerDestruction` and socket mutation tests.
   - QA Re-Audit PASSED; committed at `b7fed90`.
+
+---
+
+## Milestone 2: 8-Tab Spreadsheet Inspector & Kitbash Merger
+
+### Ticket 2.1: Remaining 5 Table Models (Vertex, Morph, DisplayFrame, RigidBody, Joint)
+* **Assigned Subagent:** `pmx_core_engineer`
+* **Target Subsystem:** `PmxModels` (Target 3)
+* **Date Issued:** 2026-10-24 21:57 UTC
+* **Status:** `[DONE]` (Committed at `9079cf6`)
+* **Specification:**
+  - Implement `PmxVertexTableModel` (`tableId = 4`): Virtualized reads for 100k+ vertices exposing PosX/Y/Z, NormX/Y/Z, UV U/V, WeightType (BDEF1/2/4, SDEF, QDEF), Bones (0..3), Weights (0..3), EdgeScale. Cell edit routing via `PmxPropertyEditCommand`, batch math operations on numeric columns, dynamic JP/EN header switching.
+  - Implement `PmxMorphTableModel` (`tableId = 5`): Exposing Name (JP/EN), Panel category (System, Eyebrow, Eye, Lip, Other), Morph Type (Group, Vertex, Bone, UV, ExtUV1..4, Material, Flip, Impulse), and sub-item offset count. Cell edit routing via `PmxPropertyEditCommand`, dynamic JP/EN header switching.
+  - Implement `PmxDisplayFrameModel` (`tableId = 6`): Exposing Frame Name (JP/EN), Special flag (0: Normal, 1: Special/Root), and frame item count.
+  - Implement `PmxRigidBodyTableModel` (`tableId = 7`): Exposing Name (JP/EN), BoneIndex, Group (0..15), Mask, Shape (Sphere, Box, Capsule), Size X/Y/Z, Pos X/Y/Z, Rot X/Y/Z, Mass, Linear/Angular Damping, Restitution, Friction, PhysicsMode (Static, Dynamic, Dynamic+BoneAlign). Cell edit routing via `PmxPropertyEditCommand`, batch math operations on numeric columns.
+  - Implement `PmxJointTableModel` (`tableId = 8`): Exposing Name (JP/EN), JointType, RigidBody A/B, Pos X/Y/Z, Rot X/Y/Z, Pos Limits Min/Max X/Y/Z, Rot Limits Min/Max X/Y/Z, Spring Pos/Rot X/Y/Z. Cell edit routing via `PmxPropertyEditCommand`, batch math operations on numeric columns.
+  - Expose `vertexModel()`, `morphModel()`, `displayFrameModel()`, `rigidBodyModel()`, and `jointModel()` on `PmxDocumentController` and update `resetAllModels()`.
+  - Update `CMakeLists.txt` adding all new headers/sources to `PmxModels`.
+  - Expand `tests/tst_pmx_undo_models.cpp` with comprehensive test cases verifying undo/redo, dynamic JP/EN toggling, bounds safety, no-op rejection, and numeric batch math across all 5 models.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_undo_models`
+
+#### Ticket 2.1 — Revision 2 (Strike 1 Fix)
+* **Date & Timestamp:** 2026-10-24 22:18 UTC
+* **Reason for Revision:**
+  - Strike 1 audit failure. The QA Inspector detected:
+    1. Command ID collision / unwanted coalescing between Japanese and English name edits across table models. Both used `makeCommandId(tableId, row, ColName)` (`col = 0`). Sequential edits of Japanese and English names coalesced into a single command under `QUndoStack`, dropping the English edit upon `undo()`.
+    2. Missing input validation on `ColPanel` (`[0, 4]`) and `ColMorphType` (`[0, 10]`) in `PmxMorphTableModel::setData`.
+    3. Missing batch arithmetic finite check (`std::isfinite(newNum)`) in `PmxRigidBodyTableModel` and `PmxJointTableModel`.
+    4. Missing unit tests for rigid body and joint batch operations in `tst_pmx_undo_models.cpp`.
+* **Revision Directives:**
+  - In all table models (`PmxMaterialTableModel`, `PmxBoneTableModel`, `PmxMorphTableModel`, `PmxDisplayFrameModel`, `PmxRigidBodyTableModel`, `PmxJointTableModel`), ensure name edit commands cannot collide across languages by passing distinct column identifiers (e.g., `isJp ? ColName : (ColName + 32)`) or passing `cmdId = -1` for `QString` name edits so they never coalesce.
+  - Add input validation for `ColPanel` and `ColMorphType` in `PmxMorphTableModel::setData`.
+  - Add `std::isfinite(newNum)` checks in batch operations for rigid bodies and joints.
+  - Add explicit unit tests for rigid body and joint batch operations in `tst_pmx_undo_models.cpp`.
