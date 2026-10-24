@@ -81,6 +81,16 @@ add_library(PmxModels STATIC
     src/models/PmxMaterialTableModel.cpp
     src/models/PmxBoneTableModel.h
     src/models/PmxBoneTableModel.cpp
+    src/models/PmxVertexTableModel.h
+    src/models/PmxVertexTableModel.cpp
+    src/models/PmxMorphTableModel.h
+    src/models/PmxMorphTableModel.cpp
+    src/models/PmxDisplayFrameModel.h
+    src/models/PmxDisplayFrameModel.cpp
+    src/models/PmxRigidBodyTableModel.h
+    src/models/PmxRigidBodyTableModel.cpp
+    src/models/PmxJointTableModel.h
+    src/models/PmxJointTableModel.cpp
 )
 
 target_include_directories(PmxModels PUBLIC

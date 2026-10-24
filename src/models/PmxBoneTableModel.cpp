@@ -140,12 +140,13 @@ bool PmxBoneTableModel::setData(const QModelIndex& index, const QVariant& value,
     switch (col) {
     case ColName: {
         bool isJp = m_controller->displayLanguage() == PmxDocumentController::DisplayLanguage::Japanese;
+        int nameCmdId = isJp ? makeCommandId(3, row, col) : makeCommandId(3, row, col + 32);
         if (isJp) {
             QString oldVal = bone.nameJp;
             QString newVal = value.toString();
             if (oldVal == newVal) return false;
             m_controller->pushCommand(new PmxPropertyEditCommand<QString>(
-                m_controller, cmdId, oldVal, newVal,
+                m_controller, nameCmdId, oldVal, newVal,
                 [row](pmx::PmxDocument& d, const QString& v) {
                     if (row >= 0 && static_cast<size_t>(row) < d.bones.size()) {
                         d.bones[row].nameJp = v;
@@ -158,7 +159,7 @@ bool PmxBoneTableModel::setData(const QModelIndex& index, const QVariant& value,
             QString newVal = value.toString();
             if (oldVal == newVal) return false;
             m_controller->pushCommand(new PmxPropertyEditCommand<QString>(
-                m_controller, cmdId, oldVal, newVal,
+                m_controller, nameCmdId, oldVal, newVal,
                 [row](pmx::PmxDocument& d, const QString& v) {
                     if (row >= 0 && static_cast<size_t>(row) < d.bones.size()) {
                         d.bones[row].nameEn = v;

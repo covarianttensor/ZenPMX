@@ -210,12 +210,13 @@ bool PmxMaterialTableModel::setData(const QModelIndex& index, const QVariant& va
 
     if (col == ColName) {
         bool isJp = m_controller->displayLanguage() == PmxDocumentController::DisplayLanguage::Japanese;
+        int nameCmdId = isJp ? makeCommandId(2, row, col) : makeCommandId(2, row, col + 32);
         if (isJp) {
             QString oldVal = mat.nameJp;
             QString newVal = value.toString();
             if (oldVal == newVal) return false;
             m_controller->pushCommand(new PmxPropertyEditCommand<QString>(
-                m_controller, cmdId, oldVal, newVal,
+                m_controller, nameCmdId, oldVal, newVal,
                 [row](pmx::PmxDocument& d, const QString& v) {
                     if (row >= 0 && static_cast<size_t>(row) < d.materials.size()) {
                         d.materials[row].nameJp = v;
@@ -228,7 +229,7 @@ bool PmxMaterialTableModel::setData(const QModelIndex& index, const QVariant& va
             QString newVal = value.toString();
             if (oldVal == newVal) return false;
             m_controller->pushCommand(new PmxPropertyEditCommand<QString>(
-                m_controller, cmdId, oldVal, newVal,
+                m_controller, nameCmdId, oldVal, newVal,
                 [row](pmx::PmxDocument& d, const QString& v) {
                     if (row >= 0 && static_cast<size_t>(row) < d.materials.size()) {
                         d.materials[row].nameEn = v;

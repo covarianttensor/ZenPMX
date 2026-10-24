@@ -13,6 +13,11 @@ namespace pmx {
 class PmxInfoModel;
 class PmxMaterialTableModel;
 class PmxBoneTableModel;
+class PmxVertexTableModel;
+class PmxMorphTableModel;
+class PmxDisplayFrameModel;
+class PmxRigidBodyTableModel;
+class PmxJointTableModel;
 class PmxDocumentSnapshotCommand;
 class PmxBatchOperationCommand;
 template <typename T> class PmxPropertyEditCommand;
@@ -59,6 +64,11 @@ public:
     PmxInfoModel* infoModel() const;
     PmxMaterialTableModel* materialModel() const;
     PmxBoneTableModel* boneModel() const;
+    PmxVertexTableModel* vertexModel() const;
+    PmxMorphTableModel* morphModel() const;
+    PmxDisplayFrameModel* displayFrameModel() const;
+    PmxRigidBodyTableModel* rigidBodyModel() const;
+    PmxJointTableModel* jointModel() const;
 
     // Internal mutation helpers (accessible ONLY to internal friend commands and models)
     pmx::PmxDocument& documentInternal();
@@ -78,6 +88,11 @@ private:
     friend class PmxMaterialTableModel;
     friend class PmxBoneTableModel;
     friend class PmxInfoModel;
+    friend class PmxVertexTableModel;
+    friend class PmxMorphTableModel;
+    friend class PmxDisplayFrameModel;
+    friend class PmxRigidBodyTableModel;
+    friend class PmxJointTableModel;
     template <typename T> friend class PmxPropertyEditCommand;
 
     pmx::PmxDocument m_document;
@@ -88,6 +103,11 @@ private:
     PmxInfoModel* m_infoModel = nullptr;
     PmxMaterialTableModel* m_materialModel = nullptr;
     PmxBoneTableModel* m_boneModel = nullptr;
+    PmxVertexTableModel* m_vertexModel = nullptr;
+    PmxMorphTableModel* m_morphModel = nullptr;
+    PmxDisplayFrameModel* m_displayFrameModel = nullptr;
+    PmxRigidBodyTableModel* m_rigidBodyModel = nullptr;
+    PmxJointTableModel* m_jointModel = nullptr;
 };
 
 } // namespace pmx

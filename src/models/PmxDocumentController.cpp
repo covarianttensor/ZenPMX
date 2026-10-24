@@ -3,8 +3,13 @@
 #include "core/PmxReader.h"
 #include "core/PmxWriter.h"
 #include "models/PmxBoneTableModel.h"
+#include "models/PmxDisplayFrameModel.h"
 #include "models/PmxInfoModel.h"
+#include "models/PmxJointTableModel.h"
 #include "models/PmxMaterialTableModel.h"
+#include "models/PmxMorphTableModel.h"
+#include "models/PmxRigidBodyTableModel.h"
+#include "models/PmxVertexTableModel.h"
 
 namespace pmx {
 
@@ -15,6 +20,11 @@ PmxDocumentController::PmxDocumentController(QObject* parent)
     m_infoModel = new PmxInfoModel(this, this);
     m_materialModel = new PmxMaterialTableModel(this, this);
     m_boneModel = new PmxBoneTableModel(this, this);
+    m_vertexModel = new PmxVertexTableModel(this, this);
+    m_morphModel = new PmxMorphTableModel(this, this);
+    m_displayFrameModel = new PmxDisplayFrameModel(this, this);
+    m_rigidBodyModel = new PmxRigidBodyTableModel(this, this);
+    m_jointModel = new PmxJointTableModel(this, this);
 
     connect(&m_undoStack, &QUndoStack::cleanChanged, this, [this](bool clean) {
         emit isModifiedChanged(!clean);
@@ -134,6 +144,26 @@ PmxBoneTableModel* PmxDocumentController::boneModel() const {
     return m_boneModel;
 }
 
+PmxVertexTableModel* PmxDocumentController::vertexModel() const {
+    return m_vertexModel;
+}
+
+PmxMorphTableModel* PmxDocumentController::morphModel() const {
+    return m_morphModel;
+}
+
+PmxDisplayFrameModel* PmxDocumentController::displayFrameModel() const {
+    return m_displayFrameModel;
+}
+
+PmxRigidBodyTableModel* PmxDocumentController::rigidBodyModel() const {
+    return m_rigidBodyModel;
+}
+
+PmxJointTableModel* PmxDocumentController::jointModel() const {
+    return m_jointModel;
+}
+
 void PmxDocumentController::resetAllModels() {
     if (m_infoModel) {
         m_infoModel->resetModel();
@@ -143,6 +173,21 @@ void PmxDocumentController::resetAllModels() {
     }
     if (m_boneModel) {
         m_boneModel->resetModel();
+    }
+    if (m_vertexModel) {
+        m_vertexModel->resetModel();
+    }
+    if (m_morphModel) {
+        m_morphModel->resetModel();
+    }
+    if (m_displayFrameModel) {
+        m_displayFrameModel->resetModel();
+    }
+    if (m_rigidBodyModel) {
+        m_rigidBodyModel->resetModel();
+    }
+    if (m_jointModel) {
+        m_jointModel->resetModel();
     }
 }
 
