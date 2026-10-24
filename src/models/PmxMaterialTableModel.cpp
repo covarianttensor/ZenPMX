@@ -345,7 +345,7 @@ bool PmxMaterialTableModel::applyBatchOperation(const QList<int>& rowIndices,
     }
 
     // Reject invalid operator
-    if (opType != QStringLiteral("+") && opType != QStringLiteral("*") && opType != QStringLiteral("=")) {
+    if (opType != QStringLiteral("+") && opType != QStringLiteral("-") && opType != QStringLiteral("*") && opType != QStringLiteral("=")) {
         return false;
     }
 

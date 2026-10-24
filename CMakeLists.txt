@@ -156,6 +156,16 @@ qt_add_qml_module(pmx-editor
     RESOURCE_PREFIX "/qt/qml"
     QML_FILES
         src/app/qml/Main.qml
+        src/app/qml/InspectorPanel.qml
+        src/app/qml/BatchOperationDialog.qml
+        src/app/qml/tabs/InfoTab.qml
+        src/app/qml/tabs/VertexTab.qml
+        src/app/qml/tabs/MaterialTab.qml
+        src/app/qml/tabs/BoneTab.qml
+        src/app/qml/tabs/MorphTab.qml
+        src/app/qml/tabs/DisplayFrameTab.qml
+        src/app/qml/tabs/RigidBodyTab.qml
+        src/app/qml/tabs/JointTab.qml
 )
 
 target_link_libraries(pmx-editor PRIVATE
@@ -231,6 +241,7 @@ add_test(NAME tst_pmx_undo_models COMMAND tst_pmx_undo_models)
 
 add_executable(tst_pmx_viewport
     tests/tst_pmx_viewport.cpp
+    src/app/PmxAppBridge.cpp
 )
 
 set_target_properties(tst_pmx_viewport PROPERTIES

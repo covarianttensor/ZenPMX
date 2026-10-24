@@ -1,7 +1,18 @@
 #include "viewport/PmxCamera.h"
 #include "viewport/PmxViewportItem.h"
 #include "models/PmxDocumentController.h"
+#include "app/PmxAppBridge.h"
+#include "models/PmxInfoModel.h"
+#include "models/PmxVertexTableModel.h"
+#include "models/PmxMaterialTableModel.h"
+#include "models/PmxBoneTableModel.h"
+#include "models/PmxMorphTableModel.h"
+#include "models/PmxDisplayFrameModel.h"
+#include "models/PmxRigidBodyTableModel.h"
+#include "models/PmxJointTableModel.h"
+#include "models/PmxUndoCommands.h"
 
+#include <QSignalSpy>
 #include <QTest>
 #include <QUndoCommand>
 #include <cmath>
@@ -21,6 +32,10 @@ private slots:
     void testHandednessConversions();
     void testFilterValidTriangleIndices();
     void testViewportItemControllerAttachment();
+    void testAppBridgeModelExposure();
+    void testAppBridgeBatchOperation();
+    void testAppBridgeBatchOperationBoundaries();
+    void testAppBridgeLanguageToggle();
 };
 
 void tst_pmx_viewport::testCameraDefaults() {
@@ -246,6 +261,292 @@ void tst_pmx_viewport::testViewportItemControllerAttachment() {
     controller.undoStack()->redo();
     quint64 rev5 = item.modelRevision();
     QVERIFY(rev5 > rev4);
+}
+
+void tst_pmx_viewport::testAppBridgeModelExposure() {
+    PmxAppBridge bridge;
+    QVERIFY(bridge.controller() != nullptr);
+
+    // Verify all 8 models are exposed and non-null
+    QVERIFY(bridge.infoModel() != nullptr);
+    QVERIFY(bridge.vertexModel() != nullptr);
+    QVERIFY(bridge.materialModel() != nullptr);
+    QVERIFY(bridge.boneModel() != nullptr);
+    QVERIFY(bridge.morphModel() != nullptr);
+    QVERIFY(bridge.displayFrameModel() != nullptr);
+    QVERIFY(bridge.rigidBodyModel() != nullptr);
+    QVERIFY(bridge.jointModel() != nullptr);
+
+    // Verify they are correctly attached to the controller
+    QCOMPARE(bridge.infoModel(), bridge.controller()->infoModel());
+    QCOMPARE(bridge.vertexModel(), bridge.controller()->vertexModel());
+    QCOMPARE(bridge.materialModel(), bridge.controller()->materialModel());
+    QCOMPARE(bridge.boneModel(), bridge.controller()->boneModel());
+    QCOMPARE(bridge.morphModel(), bridge.controller()->morphModel());
+    QCOMPARE(bridge.displayFrameModel(), bridge.controller()->displayFrameModel());
+    QCOMPARE(bridge.rigidBodyModel(), bridge.controller()->rigidBodyModel());
+    QCOMPARE(bridge.jointModel(), bridge.controller()->jointModel());
+}
+
+void tst_pmx_viewport::testAppBridgeBatchOperation() {
+    PmxAppBridge bridge;
+
+    // Create a sample document with vertices
+    pmx::PmxDocument doc;
+    for (int i = 0; i < 3; ++i) {
+        pmx::PmxVertex v;
+        v.position = glm::vec3(static_cast<float>(i * 10), static_cast<float>(i * 5), 0.0f);
+        v.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+        v.uv = glm::vec2(0.0f, 0.0f);
+        v.weightType = pmx::WeightType::BDEF1;
+        v.boneIndices[0] = 0;
+        v.boneWeights[0] = 1.0f;
+        doc.vertices.push_back(v);
+        doc.faceIndices.push_back(i);
+    }
+
+    bridge.controller()->setDocumentInternal(doc);
+    bridge.controller()->resetAllModels();
+
+    QCOMPARE(bridge.rowCount(4 /* Vertex */), 3);
+
+    // Verify initial positions
+    auto* vModel = bridge.vertexModel();
+    QCOMPARE(vModel->data(vModel->index(0, PmxVertexTableModel::ColPosX)).toDouble(), 0.0);
+    QCOMPARE(vModel->data(vModel->index(1, PmxVertexTableModel::ColPosX)).toDouble(), 10.0);
+    QCOMPARE(vModel->data(vModel->index(2, PmxVertexTableModel::ColPosX)).toDouble(), 20.0);
+
+    // Batch Add (+ 5.0) to row 0 and 1 on ColPosX
+    bool ok = bridge.applyBatchOperation(
+        4, /* tableId = 4 (Vertex) */
+        {0, 1},
+        PmxVertexTableModel::ColPosX,
+        static_cast<int>(PmxBatchOperationCommand::BatchOp::Add), // 0
+        5.0
+    );
+    QVERIFY(ok);
+
+    // Verify positions changed
+    QCOMPARE(vModel->data(vModel->index(0, PmxVertexTableModel::ColPosX)).toDouble(), 5.0);
+    QCOMPARE(vModel->data(vModel->index(1, PmxVertexTableModel::ColPosX)).toDouble(), 15.0);
+    QCOMPARE(vModel->data(vModel->index(2, PmxVertexTableModel::ColPosX)).toDouble(), 20.0); // unchanged
+
+    // Verify Undo
+    QVERIFY(bridge.canUndo());
+    bridge.undo();
+    QCOMPARE(vModel->data(vModel->index(0, PmxVertexTableModel::ColPosX)).toDouble(), 0.0);
+    QCOMPARE(vModel->data(vModel->index(1, PmxVertexTableModel::ColPosX)).toDouble(), 10.0);
+    QCOMPARE(vModel->data(vModel->index(2, PmxVertexTableModel::ColPosX)).toDouble(), 20.0);
+
+    // Verify Redo
+    QVERIFY(bridge.canRedo());
+    bridge.redo();
+    QCOMPARE(vModel->data(vModel->index(0, PmxVertexTableModel::ColPosX)).toDouble(), 5.0);
+    QCOMPARE(vModel->data(vModel->index(1, PmxVertexTableModel::ColPosX)).toDouble(), 15.0);
+    QCOMPARE(vModel->data(vModel->index(2, PmxVertexTableModel::ColPosX)).toDouble(), 20.0);
+
+    // Also test Batch Subtract (- 2.0)
+    bool okSub = bridge.applyBatchOperation(
+        4,
+        {0, 1},
+        PmxVertexTableModel::ColPosX,
+        static_cast<int>(PmxBatchOperationCommand::BatchOp::Subtract), // 1
+        2.0
+    );
+    QVERIFY(okSub);
+    QCOMPARE(vModel->data(vModel->index(0, PmxVertexTableModel::ColPosX)).toDouble(), 3.0);
+    QCOMPARE(vModel->data(vModel->index(1, PmxVertexTableModel::ColPosX)).toDouble(), 13.0);
+
+    // Also test Multiply (* 2.0)
+    bool okMul = bridge.applyBatchOperation(
+        4,
+        {0},
+        PmxVertexTableModel::ColPosX,
+        static_cast<int>(PmxBatchOperationCommand::BatchOp::Multiply), // 2
+        2.0
+    );
+    QVERIFY(okMul);
+    QCOMPARE(vModel->data(vModel->index(0, PmxVertexTableModel::ColPosX)).toDouble(), 6.0);
+
+    // Also test Assign (= 42.0)
+    bool okAssign = bridge.applyBatchOperation(
+        4,
+        {2},
+        PmxVertexTableModel::ColPosX,
+        static_cast<int>(PmxBatchOperationCommand::BatchOp::Assign), // 3
+        42.0
+    );
+    QVERIFY(okAssign);
+    QCOMPARE(vModel->data(vModel->index(2, PmxVertexTableModel::ColPosX)).toDouble(), 42.0);
+}
+
+void tst_pmx_viewport::testAppBridgeBatchOperationBoundaries() {
+    PmxAppBridge bridge;
+
+    // Set up a document populated with 2 vertices, 2 materials, 2 bones, 2 rigid bodies, 2 joints
+    pmx::PmxDocument doc;
+
+    // Vertices
+    for (int i = 0; i < 2; ++i) {
+        pmx::PmxVertex v;
+        v.position = glm::vec3(static_cast<float>(i * 10), 0.0f, 0.0f);
+        doc.vertices.push_back(v);
+        doc.faceIndices.push_back(i);
+    }
+
+    // Materials
+    for (int i = 0; i < 2; ++i) {
+        pmx::PmxMaterial m;
+        m.nameJp = QStringLiteral("Mat%1").arg(i);
+        m.edgeSize = 1.0f + static_cast<float>(i);
+        doc.materials.push_back(m);
+    }
+
+    // Bones
+    for (int i = 0; i < 2; ++i) {
+        pmx::PmxBone b;
+        b.nameJp = QStringLiteral("Bone%1").arg(i);
+        b.position = glm::vec3(0.0f, static_cast<float>(i * 10), 0.0f);
+        doc.bones.push_back(b);
+    }
+
+    // Rigid bodies
+    for (int i = 0; i < 2; ++i) {
+        pmx::PmxRigidBody rb;
+        rb.nameJp = QStringLiteral("Body%1").arg(i);
+        rb.mass = 1.0f + static_cast<float>(i);
+        doc.rigidBodies.push_back(rb);
+    }
+
+    // Joints
+    for (int i = 0; i < 2; ++i) {
+        pmx::PmxJoint j;
+        j.nameJp = QStringLiteral("Joint%1").arg(i);
+        j.springLinearStiffness = glm::vec3(10.0f * (i + 1), 0.0f, 0.0f);
+        doc.joints.push_back(j);
+    }
+
+    bridge.controller()->setDocumentInternal(doc);
+    bridge.controller()->resetAllModels();
+
+    // Verify rowCount for all table IDs
+    QCOMPARE(bridge.rowCount(0), 13); // Info rows (RowCount = 13)
+    QCOMPARE(bridge.rowCount(1), 13); // Info rows (RowCount = 13)
+    QCOMPARE(bridge.rowCount(2), 2);  // Material
+    QCOMPARE(bridge.rowCount(3), 2);  // Bone
+    QCOMPARE(bridge.rowCount(4), 2);  // Vertex
+    QCOMPARE(bridge.rowCount(5), 0);  // Morph
+    QCOMPARE(bridge.rowCount(6), 0);  // DisplayFrame
+    QCOMPARE(bridge.rowCount(7), 2);  // RigidBody
+    QCOMPARE(bridge.rowCount(8), 2);  // Joint
+    QCOMPARE(bridge.rowCount(-1), 0); // Invalid
+    QCOMPARE(bridge.rowCount(99), 0); // Invalid
+
+    // 1. Boundary: Empty row selection list
+    QVERIFY(!bridge.applyBatchOperation(4, {}, PmxVertexTableModel::ColPosX, 0, 5.0));
+
+    // 2. Boundary: Invalid table IDs (not in {2, 3, 4, 7, 8})
+    QVERIFY(!bridge.applyBatchOperation(-1, {0}, 1, 0, 5.0));
+    QVERIFY(!bridge.applyBatchOperation(0, {0}, 1, 0, 5.0));
+    QVERIFY(!bridge.applyBatchOperation(1, {0}, 1, 0, 5.0)); // Info table does not support batch
+    QVERIFY(!bridge.applyBatchOperation(5, {0}, 1, 0, 5.0)); // Morph table does not support batch
+    QVERIFY(!bridge.applyBatchOperation(6, {0}, 1, 0, 5.0)); // DisplayFrame table does not support batch
+    QVERIFY(!bridge.applyBatchOperation(99, {0}, 1, 0, 5.0));
+
+    // 3. Boundary: Invalid operation enum
+    QVERIFY(!bridge.applyBatchOperation(4, {0}, PmxVertexTableModel::ColPosX, -1, 5.0));
+    QVERIFY(!bridge.applyBatchOperation(4, {0}, PmxVertexTableModel::ColPosX, 4, 5.0));
+    QVERIFY(!bridge.applyBatchOperation(4, {0}, PmxVertexTableModel::ColPosX, 100, 5.0));
+
+    // 4. Boundary: Invalid columns
+    QVERIFY(!bridge.applyBatchOperation(4, {0}, -1, 0, 5.0));
+    QVERIFY(!bridge.applyBatchOperation(4, {0}, PmxVertexTableModel::ColIndex, 0, 5.0)); // Read-only index col
+    QVERIFY(!bridge.applyBatchOperation(4, {0}, PmxVertexTableModel::ColumnCount, 0, 5.0));
+    QVERIFY(!bridge.applyBatchOperation(4, {0}, 999, 0, 5.0));
+
+    // 5. Boundary: NaN and Inf operands
+    double qnan = std::numeric_limits<double>::quiet_NaN();
+    double pinf = std::numeric_limits<double>::infinity();
+    double ninf = -std::numeric_limits<double>::infinity();
+    QVERIFY(!bridge.applyBatchOperation(4, {0}, PmxVertexTableModel::ColPosX, 0, qnan));
+    QVERIFY(!bridge.applyBatchOperation(4, {0}, PmxVertexTableModel::ColPosX, 0, pinf));
+    QVERIFY(!bridge.applyBatchOperation(4, {0}, PmxVertexTableModel::ColPosX, 0, ninf));
+
+    // 6. Boundary: Purely out-of-bounds rows
+    QVERIFY(!bridge.applyBatchOperation(4, {-5, -1, 10, 50}, PmxVertexTableModel::ColPosX, 0, 5.0));
+
+    // 7. Boundary: Mixed valid and out-of-bounds rows
+    // Only row 0 should be updated; invalid rows skipped safely without crash or memory corruption
+    auto* vModel = bridge.vertexModel();
+    QCOMPARE(vModel->data(vModel->index(0, PmxVertexTableModel::ColPosX)).toDouble(), 0.0);
+    bool okMixed = bridge.applyBatchOperation(4, {-1, 0, 100}, PmxVertexTableModel::ColPosX, 0, 7.5);
+    QVERIFY(okMixed);
+    QCOMPARE(vModel->data(vModel->index(0, PmxVertexTableModel::ColPosX)).toDouble(), 7.5);
+    QCOMPARE(vModel->data(vModel->index(1, PmxVertexTableModel::ColPosX)).toDouble(), 10.0); // row 1 untouched
+
+    // Undo mixed operation
+    bridge.undo();
+    QCOMPARE(vModel->data(vModel->index(0, PmxVertexTableModel::ColPosX)).toDouble(), 0.0);
+
+    // 8. Functional test: Material table (tableId = 2) batch operation
+    auto* mModel = bridge.materialModel();
+    QCOMPARE(mModel->data(mModel->index(0, PmxMaterialTableModel::ColEdgeSize)).toDouble(), 1.0);
+    QCOMPARE(mModel->data(mModel->index(1, PmxMaterialTableModel::ColEdgeSize)).toDouble(), 2.0);
+    bool okMat = bridge.applyBatchOperation(2, {0, 1}, PmxMaterialTableModel::ColEdgeSize, 0 /* Add */, 0.5);
+    QVERIFY(okMat);
+    QCOMPARE(mModel->data(mModel->index(0, PmxMaterialTableModel::ColEdgeSize)).toDouble(), 1.5);
+    QCOMPARE(mModel->data(mModel->index(1, PmxMaterialTableModel::ColEdgeSize)).toDouble(), 2.5);
+    bridge.undo();
+    QCOMPARE(mModel->data(mModel->index(0, PmxMaterialTableModel::ColEdgeSize)).toDouble(), 1.0);
+    QCOMPARE(mModel->data(mModel->index(1, PmxMaterialTableModel::ColEdgeSize)).toDouble(), 2.0);
+    bridge.redo();
+    QCOMPARE(mModel->data(mModel->index(0, PmxMaterialTableModel::ColEdgeSize)).toDouble(), 1.5);
+    QCOMPARE(mModel->data(mModel->index(1, PmxMaterialTableModel::ColEdgeSize)).toDouble(), 2.5);
+
+    // 9. Functional test: Bone table (tableId = 3) batch operation
+    auto* bModel = bridge.boneModel();
+    QCOMPARE(bModel->data(bModel->index(0, PmxBoneTableModel::ColPosY)).toDouble(), 0.0);
+    bool okBone = bridge.applyBatchOperation(3, {0}, PmxBoneTableModel::ColPosY, 0 /* Add */, 3.0);
+    QVERIFY(okBone);
+    QCOMPARE(bModel->data(bModel->index(0, PmxBoneTableModel::ColPosY)).toDouble(), 3.0);
+    bridge.undo();
+    QCOMPARE(bModel->data(bModel->index(0, PmxBoneTableModel::ColPosY)).toDouble(), 0.0);
+
+    // 10. Functional test: RigidBody table (tableId = 7) batch operation
+    auto* rbModel = bridge.rigidBodyModel();
+    QCOMPARE(rbModel->data(rbModel->index(1, PmxRigidBodyTableModel::ColMass)).toDouble(), 2.0);
+    bool okRb = bridge.applyBatchOperation(7, {1}, PmxRigidBodyTableModel::ColMass, 2 /* Multiply */, 3.0);
+    QVERIFY(okRb);
+    QCOMPARE(rbModel->data(rbModel->index(1, PmxRigidBodyTableModel::ColMass)).toDouble(), 6.0);
+    bridge.undo();
+    QCOMPARE(rbModel->data(rbModel->index(1, PmxRigidBodyTableModel::ColMass)).toDouble(), 2.0);
+
+    // 11. Functional test: Joint table (tableId = 8) batch operation
+    auto* jModel = bridge.jointModel();
+    QCOMPARE(jModel->data(jModel->index(0, PmxJointTableModel::ColSpringPosX)).toDouble(), 10.0);
+    bool okJoint = bridge.applyBatchOperation(8, {0}, PmxJointTableModel::ColSpringPosX, 0 /* Add */, 5.0);
+    QVERIFY(okJoint);
+    QCOMPARE(jModel->data(jModel->index(0, PmxJointTableModel::ColSpringPosX)).toDouble(), 15.0);
+    bridge.undo();
+    QCOMPARE(jModel->data(jModel->index(0, PmxJointTableModel::ColSpringPosX)).toDouble(), 10.0);
+}
+
+void tst_pmx_viewport::testAppBridgeLanguageToggle() {
+    PmxAppBridge bridge;
+    QSignalSpy spy(&bridge, &PmxAppBridge::languageChanged);
+
+    // Initial language defaults to Japanese
+    QCOMPARE(bridge.displayLanguage(), QStringLiteral("Japanese"));
+
+    // Toggle once -> English
+    bridge.toggleLanguage();
+    QCOMPARE(bridge.displayLanguage(), QStringLiteral("English"));
+    QCOMPARE(spy.count(), 1);
+
+    // Toggle again -> Japanese
+    bridge.toggleLanguage();
+    QCOMPARE(bridge.displayLanguage(), QStringLiteral("Japanese"));
+    QCOMPARE(spy.count(), 2);
 }
 
 QTEST_MAIN(tst_pmx_viewport)

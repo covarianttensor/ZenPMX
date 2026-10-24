@@ -149,130 +149,14 @@ ApplicationWindow {
 
         // Right Inspector Panel
         Item {
-            SplitView.preferredWidth: 380
-            SplitView.minimumWidth: 260
-            SplitView.maximumWidth: 600
+            SplitView.preferredWidth: 460
+            SplitView.minimumWidth: 320
+            SplitView.maximumWidth: 1200
             SplitView.fillHeight: true
 
-            ColumnLayout {
+            InspectorPanel {
+                id: inspectorPanel
                 anchors.fill: parent
-                spacing: 0
-
-                TabBar {
-                    id: inspectorTabs
-                    Layout.fillWidth: true
-                    TabButton { text: "Info" }
-                    TabButton { text: "Material" }
-                    TabButton { text: "Bone" }
-                }
-
-                StackLayout {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    currentIndex: inspectorTabs.currentIndex
-
-                    // Tab 1: Info Model
-                    Rectangle {
-                        color: "#222225"
-                        clip: true
-
-                        TableView {
-                            id: infoTable
-                            anchors.fill: parent
-                            model: bridge.infoModel
-                            boundsBehavior: Flickable.StopAtBounds
-                            columnSpacing: 1
-                            rowSpacing: 1
-
-                            delegate: Rectangle {
-                                implicitWidth: column === 0 ? 120 : 240
-                                implicitHeight: 28
-                                color: (row % 2 === 0) ? "#27272b" : "#212124"
-                                border.color: "#353538"
-                                border.width: 1
-
-                                Text {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 6
-                                    anchors.rightMargin: 6
-                                    verticalAlignment: Text.AlignVCenter
-                                    color: "#e0e0e0"
-                                    text: display !== undefined ? display.toString() : ""
-                                    elide: Text.ElideRight
-                                    font.pixelSize: 12
-                                }
-                            }
-                        }
-                    }
-
-                    // Tab 2: Material Model
-                    Rectangle {
-                        color: "#222225"
-                        clip: true
-
-                        TableView {
-                            id: materialTable
-                            anchors.fill: parent
-                            model: bridge.materialModel
-                            boundsBehavior: Flickable.StopAtBounds
-                            columnSpacing: 1
-                            rowSpacing: 1
-
-                            delegate: Rectangle {
-                                implicitWidth: (column === 0 || column === 22) ? 140 : 65
-                                implicitHeight: 28
-                                color: (row % 2 === 0) ? "#27272b" : "#212124"
-                                border.color: "#353538"
-                                border.width: 1
-
-                                Text {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 4
-                                    anchors.rightMargin: 4
-                                    verticalAlignment: Text.AlignVCenter
-                                    color: "#e0e0e0"
-                                    text: display !== undefined ? display.toString() : ""
-                                    elide: Text.ElideRight
-                                    font.pixelSize: 11
-                                }
-                            }
-                        }
-                    }
-
-                    // Tab 3: Bone Model
-                    Rectangle {
-                        color: "#222225"
-                        clip: true
-
-                        TableView {
-                            id: boneTable
-                            anchors.fill: parent
-                            model: bridge.boneModel
-                            boundsBehavior: Flickable.StopAtBounds
-                            columnSpacing: 1
-                            rowSpacing: 1
-
-                            delegate: Rectangle {
-                                implicitWidth: column === 0 ? 130 : 65
-                                implicitHeight: 28
-                                color: (row % 2 === 0) ? "#27272b" : "#212124"
-                                border.color: "#353538"
-                                border.width: 1
-
-                                Text {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 4
-                                    anchors.rightMargin: 4
-                                    verticalAlignment: Text.AlignVCenter
-                                    color: "#e0e0e0"
-                                    text: display !== undefined ? display.toString() : ""
-                                    elide: Text.ElideRight
-                                    font.pixelSize: 11
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
     }

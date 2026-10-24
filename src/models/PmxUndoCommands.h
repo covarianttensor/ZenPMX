@@ -107,6 +107,13 @@ private:
 // Batch operation command for multi-row edits with single-step undo across table models.
 class PmxBatchOperationCommand : public QUndoCommand {
 public:
+    enum class BatchOp {
+        Add = 0,
+        Subtract = 1,
+        Multiply = 2,
+        Assign = 3
+    };
+
     struct Delta {
         int row = -1;
         QVariant oldValue;
