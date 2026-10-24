@@ -32,7 +32,7 @@ if(COMMAND qt_policy)
     qt_policy(SET QTP0004 NEW)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Test GuiPrivate ShaderTools)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Network Test GuiPrivate ShaderTools)
 
 find_package(glm QUIET)
 if(NOT TARGET glm::glm)
@@ -155,6 +155,38 @@ target_link_libraries(pmx-editor PRIVATE
     Qt6::QuickControls2
 )
 
+add_library(PmxMcpServer STATIC
+    src/mcp/PmxMcpServer.h
+    src/mcp/PmxMcpServer.cpp
+)
+
+target_include_directories(PmxMcpServer PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/mcp"
+)
+
+target_link_libraries(PmxMcpServer PUBLIC
+    PmxCore
+    PmxModels
+    Qt6::Core
+    Qt6::Network
+)
+
+add_executable(pmx-mcp
+    src/mcp/main_mcp.cpp
+)
+
+target_include_directories(pmx-mcp PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/mcp"
+)
+
+target_link_libraries(pmx-mcp PRIVATE
+    PmxMcpServer
+    PmxModels
+    PmxCore
+)
+
 enable_testing()
 
 add_executable(tst_pmx_roundtrip
@@ -204,5 +236,22 @@ target_link_libraries(tst_pmx_viewport PRIVATE
 )
 
 add_test(NAME tst_pmx_viewport COMMAND tst_pmx_viewport)
+
+add_executable(tst_pmx_mcp
+    tests/tst_pmx_mcp.cpp
+)
+
+set_target_properties(tst_pmx_mcp PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
+)
+
+target_link_libraries(tst_pmx_mcp PRIVATE
+    PmxMcpServer
+    PmxModels
+    PmxCore
+    Qt6::Test
+)
+
+add_test(NAME tst_pmx_mcp COMMAND tst_pmx_mcp)
 
 
