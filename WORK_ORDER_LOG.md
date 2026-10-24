@@ -151,3 +151,26 @@
   - Add input validation for `ColPanel` and `ColMorphType` in `PmxMorphTableModel::setData`.
   - Add `std::isfinite(newNum)` checks in batch operations for rigid bodies and joints.
   - Add explicit unit tests for rigid body and joint batch operations in `tst_pmx_undo_models.cpp`.
+
+---
+
+### Ticket 2.2: Spreadsheet UI Completion: 8 QML Tabs, Multi-Select & Search/Filter
+* **Assigned Subagent:** `pmx_ui_engineer`
+* **Target Subsystem:** `PmxModels` / `pmx-editor` (Target 8)
+* **Date Issued:** 2026-10-24 22:35 UTC
+* **Status:** `[DONE]` (Committed at `f8d69e6`)
+* **Specification:**
+  - Expand `PmxAppBridge` (`src/app/PmxAppBridge.h/.cpp`) exposing all 8 models as QML properties (`infoModel`, `materialModel`, `boneModel`, `vertexModel`, `morphModel`, `displayFrameModel`, `rigidBodyModel`, `jointModel`). Add `Q_INVOKABLE bool applyBatchOperation(int tableId, const QList<int>& rows, int column, int operation, double operand);`.
+  - Create modular QML spreadsheet views in `src/app/qml/tabs/`:
+    - `InfoTab.qml`, `VertexTab.qml`, `MaterialTab.qml`, `BoneTab.qml`, `MorphTab.qml`, `DisplayFrameTab.qml`, `RigidBodyTab.qml`, `JointTab.qml`.
+  - Create `src/app/qml/InspectorPanel.qml`:
+    - TabBar for all 8 canonical tabs with JP/EN text binding.
+    - Search/Filter bar for name filtering.
+    - Multi-row selection tracking.
+    - Batch operation trigger button opening `BatchOperationDialog.qml`.
+  - Create `src/app/qml/BatchOperationDialog.qml`:
+    - Modal dialog allowing users to choose column, operation (`+`, `-`, `*`, `=`), and numeric operand, invoking `bridge.applyBatchOperation`.
+  - Update `src/app/qml/Main.qml` to host the modular `InspectorPanel.qml`.
+  - Update `CMakeLists.txt` `qt_add_qml_module` with all new `.qml` files.
+  - Expand `tests/tst_pmx_viewport.cpp` (or add test cases) verifying `PmxAppBridge` model accessors, batch operation dispatching, and language toggle bindings.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`

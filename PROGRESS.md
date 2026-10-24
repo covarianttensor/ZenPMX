@@ -10,8 +10,8 @@
 * **GitHub Repository:** [`https://github.com/covarianttensor/ZenPMX`](https://github.com/covarianttensor/ZenPMX) (Public)
 * **Active Phase:** Phase 1 / Milestone 1 Completed (`v0.1.0-milestone1` pushed to GitHub)
 * **Next Target:** Phase 2 / Milestone 2 (Complete 8-Tab Spreadsheet Inspector & Kitbash Merger)
-* **Overall Completion Level:** ~30%
-* **Current Working Tree:** Clean (`main` branch commit `9079cf6`)
+* **Overall Completion Level:** ~35%
+* **Current Working Tree:** Clean (`main` branch commit `f8d69e6`)
 * **Test Suite Status:** 4/4 CTest suites passing (51 unit tests, 0 failures, 100% clean under ASan + UBSan)
 
 ---
@@ -34,6 +34,7 @@
 | Date / UTC | Ticket ID | Subsystem Target | Subagent | Commit | Test Status | Token Burn | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
 | 2026-10-24 22:27 | **Ticket-2.1** | State / Models (`PmxModels`) | `pmx_core_engineer` | `9079cf6` | 4/4 CTest (25/25 QtTest) | ~36k | 5 table models (Vertex, Morph, Display, RigidBody, Joint). Strike 1 resolved JP/EN command ID collision & bounds checks. |
+| 2026-10-24 22:54 | **Ticket-2.2** | UI / Viewport (`pmx-editor`) | `pmx_ui_engineer` | `f8d69e6` | 4/4 CTest (14/14 QtTest) | ~32k | 8 modular QML tabs, InspectorPanel, BatchOperationDialog, multi-select, search filter, ASan/UBSan clean. |
 
 ---
 
