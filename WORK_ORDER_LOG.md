@@ -174,3 +174,23 @@
   - Update `CMakeLists.txt` `qt_add_qml_module` with all new `.qml` files.
   - Expand `tests/tst_pmx_viewport.cpp` (or add test cases) verifying `PmxAppBridge` model accessors, batch operation dispatching, and language toggle bindings.
 * **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+---
+
+### Ticket 2.3: Legacy PMD Binary Importer (`PmdImporter.cpp`)
+* **Assigned Subagent:** `pmx_core_engineer`
+* **Target Subsystem:** `PmxCore` (Target 1)
+* **Date Issued:** 2026-10-24 23:25 UTC
+* **Status:** `[DONE]` (Committed at `6de48c9`)
+* **Specification:**
+  - Implement `src/core/PmdImporter.h` and `src/core/PmdImporter.cpp` reading legacy MMD `.pmd` v1.0 binary files and upgrading them into canonical `PmxDocument` structures.
+  - Enforce minimum wire-byte bounds checking (`checkCountBounds`) prior to every vector allocation across all PMD sections.
+  - Verify magic bytes `"Pmd"` and version `1.0f`.
+  - Decode Shift-JIS text strings (model names, comments, bone/morph names) using `QStringConverter::Encoding::ShiftJIS` to `QString`.
+  - Convert PMD vertices: positions, normals, UVs, 2-bone indices, and 1-byte bone weight (0..100) normalized into floating-point `BDEF2` ($w_0 = w / 100.0f$, $w_1 = 1.0f - w_0$).
+  - Convert PMD materials: diffuse, specular, ambient, shininess, toon index (`toon01.bmp`..`toon10.bmp`), edge flag, face vertex counts, and parse texture/sphere paths (delimited by `*`).
+  - Convert PMD bones, IK chains (mapping target, loop iterations, angle limits, links), morphs (extracting base morph vertex indices and mapping skin offsets), and display frames.
+  - Parse optional PMD English extension (English model name, comments, bone/skin/group names) if present.
+  - Parse optional PMD Bullet Physics extension (rigid bodies and 6DoF spring constraints) if present.
+  - Update `CMakeLists.txt` adding `PmdImporter.h/.cpp` to `PmxCore` and create test suite `tests/tst_pmd_import.cpp`.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmd_import`

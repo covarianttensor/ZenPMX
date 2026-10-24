@@ -9,7 +9,7 @@
 
 ```text
 ================================================================================
-[██████████████░░░░░░░░░░░░░░░░░░░░░░░░░░] 35% COMPLETE
+[████████████████░░░░░░░░░░░░░░░░░░░░░░░░] 40% COMPLETE
 ================================================================================
 Project: ZenPMX (Native Linux PMX Editor)
 Repository: https://github.com/covarianttensor/ZenPMX (Public)
@@ -53,7 +53,7 @@ Scale out the spreadsheet data engineering capabilities to all 8 canonical PMX t
 | :--- | :--- | :--- | :--- | :---: | :--- | :---: |
 | **Ticket 2.1** | **Remaining 5 Table Models (Vertex, Morph, Display, RigidBody, Joint)** | `PmxModels` | `pmx_core_engineer` | `[DONE]` | Ticket 1.3 | `9079cf6` |
 | **Ticket 2.2** | **Spreadsheet UI Completion: 8 QML Tabs, Multi-Select & Search/Filter** | `PmxModels` / `pmx-editor` | `pmx_ui_engineer` | `[DONE]` | Ticket 2.1 | `f8d69e6` |
-| **Ticket 2.3** | **Legacy PMD Binary Importer (`PmdImporter.cpp`)** | `PmxCore` | `pmx_core_engineer` | `[TODO]` | Ticket 1.2 |
+| **Ticket 2.3** | **Legacy PMD Binary Importer (`PmdImporter.cpp`)** | `PmxCore` | `pmx_core_engineer` | `[DONE]` | Ticket 1.2 | `6de48c9` |
 | **Ticket 2.4** | **Kitbash Merger Engine (`PmxMerger.cpp` — 追加選択)** | `PmxCore` / `PmxModels` | `pmx_core_engineer` | `[TODO]` | Ticket 2.1, Ticket 2.3 |
 | **Ticket 2.5** | **Assimp Accessory Importer (`AssimpImporter.cpp`)** | `PmxCore` | `pmx_core_engineer` | `[TODO]` | Ticket 2.4 |
 
