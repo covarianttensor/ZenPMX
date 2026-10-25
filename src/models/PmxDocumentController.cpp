@@ -1,7 +1,9 @@
 #include "models/PmxDocumentController.h"
 
+#include "core/PmxMerger.h"
 #include "core/PmxReader.h"
 #include "core/PmxWriter.h"
+#include "models/PmxUndoCommands.h"
 #include "models/PmxBoneTableModel.h"
 #include "models/PmxDisplayFrameModel.h"
 #include "models/PmxInfoModel.h"
@@ -69,6 +71,18 @@ bool PmxDocumentController::saveToFile(const QString& filePath, QString* errorMe
     m_document.sourceFilePath = targetPath;
     m_undoStack.setClean();
     emit documentSaved(targetPath);
+    return true;
+}
+
+bool PmxDocumentController::mergeModel(const PmxDocument& incomingDoc, const MergeOptions& options, QString* errorMessage) {
+    PmxDocument mergedDoc = m_document;
+    if (!PmxMerger::merge(mergedDoc, incomingDoc, options, errorMessage)) {
+        return false;
+    }
+
+    auto* command = new PmxDocumentSnapshotCommand(this, std::move(mergedDoc), QStringLiteral("Merge Model (追加選択)"));
+    m_undoStack.push(command);
+    resetAllModels();
     return true;
 }
 

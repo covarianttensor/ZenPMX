@@ -58,6 +58,8 @@ add_library(PmxCore STATIC
     src/core/PmxWriter.cpp
     src/core/PmdImporter.h
     src/core/PmdImporter.cpp
+    src/core/PmxMerger.h
+    src/core/PmxMerger.cpp
 )
 
 target_include_directories(PmxCore PUBLIC
@@ -293,3 +295,19 @@ target_link_libraries(tst_pmd_import PRIVATE
 )
 
 add_test(NAME tst_pmd_import COMMAND tst_pmd_import)
+
+add_executable(tst_pmx_merger
+    tests/tst_pmx_merger.cpp
+)
+
+set_target_properties(tst_pmx_merger PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
+)
+
+target_link_libraries(tst_pmx_merger PRIVATE
+    PmxCore
+    PmxModels
+    Qt6::Test
+)
+
+add_test(NAME tst_pmx_merger COMMAND tst_pmx_merger)

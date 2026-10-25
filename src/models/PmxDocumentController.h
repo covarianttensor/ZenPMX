@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/PmxDocument.h"
+#include "core/PmxMerger.h"
 #include "core/PmxTypes.h"
 #include "models/PmxSelectionManager.h"
 
@@ -37,9 +38,10 @@ public:
     explicit PmxDocumentController(QObject* parent = nullptr);
     ~PmxDocumentController() override;
 
-    // Document loading / saving
+    // Document loading / saving / merging
     bool loadFromFile(const QString& filePath, QString* errorMessage = nullptr);
     bool saveToFile(const QString& filePath = QString(), QString* errorMessage = nullptr);
+    bool mergeModel(const PmxDocument& incomingDoc, const MergeOptions& options = {}, QString* errorMessage = nullptr);
 
     // Document state (const access only for public callers - enforces State Mutation Law)
     const pmx::PmxDocument& document() const;
