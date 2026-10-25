@@ -427,3 +427,64 @@
 * **Revision Directives:**
   - Add `std::isfinite()` guards before rounding with snapping parameters in `PmxGizmo.cpp`.
   - Add explicit assertions for zero/negative screen dimensions, `scale = 0`, `GizmoMode::None`, `snap = Inf`, out-of-bounds indices, null controllers, and `mergeWith` rejection in `tests/tst_pmx_viewport.cpp`.
+
+---
+
+### Ticket 3.4: Wireframe Visualizers for Bones, Rigid Bodies (Sphere/Box/Capsule) & 6DoF Joints
+* **Assigned Subagent:** `pmx_ui_engineer`
+* **Target Subsystem:** `PmxViewport` (Target 4: `src/viewport/`)
+* **Date Issued:** 2026-10-25 03:38 UTC
+* **Status:** `[DONE]` (Committed at `1b6afef`)
+* **Specification:**
+  - Modular Wireframe Visualizer Engine (`src/viewport/PmxWireframeRenderer.h/.cpp`):
+    - Create `PmxWireframeRenderer` utility class generating `std::vector<LineVertex>` for bones, physics, and joints.
+    - Bone Wireframes:
+      - Render 3D octahedral wireframe pyramids from bone head to tail:
+        - If `flagConnection == 0` (tail is bone) and `tailBoneIndex` is valid, apex at child bone position; base ring at 15-20% length along the bone shaft with 4 diamond edges connecting to origin and 4 edges connecting to apex.
+        - If `flagConnection == 1` (tail offset) and `length(tailOffset) > 0.001f`, apex at `position + tailOffset`.
+        - If unlinked / zero-length tail, draw a small local octahedron (radius 0.2 units).
+      - Connection lines to child bones and parent bones.
+      - Bone coordinate crosses at joints.
+    - Bullet3 Rigid Body Wireframes:
+      - Geometric wireframes matching PMX `shapeType`:
+        - **Sphere (`shapeType == 0`):** 3 orthogonal wireframe circles (XY, XZ, YZ) of radius `shapeSize.x`.
+        - **Box (`shapeType == 1`):** 12 wireframe edge lines forming rectangular box of dimensions `shapeSize.x * 2, shapeSize.y * 2, shapeSize.z * 2` (or full extent matching PMX spec).
+        - **Capsule (`shapeType == 2`):** Wireframe cylinder (radius `shapeSize.x`, length `shapeSize.y` between dome centers) plus 2 hemispherical wireframe dome rings/arcs at top and bottom.
+      - World transformation:
+        - Position: convert to RH `(p.x, p.y, -p.z)`.
+        - Rotation: apply PMX Euler angles converted to RH rotation matrix.
+      - Color coding by `operationMode`:
+        - Mode 0 (Static / Kinematic bone-follow): Sky Blue `glm::vec4(0.2f, 0.55f, 1.0f, 0.85f)`
+        - Mode 1 (Dynamic / Bullet simulated): Bright Orange `glm::vec4(1.0f, 0.5f, 0.05f, 0.85f)`
+        - Mode 2 (Dynamic + Bone alignment): Golden Yellow `glm::vec4(1.0f, 0.85f, 0.1f, 0.85f)`
+    - 6DoF Spring Joint Wireframes:
+      - Coordinate cross at joint position `(p.x, p.y, -p.z)` oriented by joint Euler rotation (X=Red, Y=Green, Z=Blue).
+      - Circular limit arcs showing angular constraint range (`rotationMin` to `rotationMax` around each axis).
+      - Joint connection lines: Dotted/solid lines connecting joint position to the centers of linked `rigidBodyA` and `rigidBodyB` (if indices valid).
+  - Viewport & UI Integration (`src/viewport/PmxViewportItem.h/.cpp`, `src/app/Main.qml`):
+    - Expose QML boolean properties: `showBones` (existing), `showRigidBodies` (new), `showJoints` (new).
+    - Synchronize dirty state when document or visibility toggles change.
+    - Render overlays using `m_linePipeline`.
+    - Update `Main.qml` with viewport toolbar toggles for Bones, Physics (Rigid Bodies), and Joints.
+  - Test Suite (`tests/tst_pmx_viewport.cpp`):
+    - Unit tests for bone octahedron generation and tail linkage.
+    - Unit tests for Sphere, Box, and Capsule wireframe vertex counts and color assignments.
+    - Unit tests for 6DoF joint crosses, limit arcs, and body connection lines.
+    - Edge cases & boundary safety: non-finite coordinates, NaN/Inf sizes, negative dimensions, invalid bone/body indices, empty documents.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+#### Ticket 3.4 — Revision 2 (Strike 1 Remediation)
+* **Date & Timestamp:** 2026-10-25 04:05 UTC
+* **Reason for Revision:**
+  - Strike 1 audit failure detected by `pmx_qa_adversary`:
+    1. **Spec Drift (Critical):** Handedness inversion omitted for joint rotational limits in `src/viewport/PmxWireframeRenderer.cpp#L346-L397`. In RH coordinates, Euler rotations around X and Y invert sign ($rx_{RH} = -rx_{LH}$, $ry_{RH} = -ry_{LH}$). For limits, bounds must invert:
+       $$\min X_{RH} = -\max X_{LH}, \quad \max X_{RH} = -\min X_{LH}$$
+       $$\min Y_{RH} = -\max Y_{LH}, \quad \max Y_{RH} = -\min Y_{LH}$$
+       $$\min Z_{RH} = \min Z_{LH}, \quad \max Z_{RH} = \max Z_{LH}$$
+    2. **Selection Refresh Defect:** In `src/viewport/PmxViewportItem.cpp#L863-L901`, `updateGizmoPosition()` only called `update()` if bones or vertices were selected. Selecting rigid bodies or joints in the inspector failed to trigger a viewport repaint.
+    3. **Hollow Test Coverage:** `tests/tst_pmx_viewport.cpp` omitted assertions for exact bone diamond base points, non-zero Euler rotation on rigid bodies and joints, sphere radius offsets, box corner extents, capsule dome apex points, and asymmetric joint angular limits.
+* **Revision Directives:**
+  - Apply handedness inversion to X and Y angular limit ranges in `src/viewport/PmxWireframeRenderer.cpp`.
+  - Ensure `PmxViewportItem` always calls `update()` on selection change so rigid body and joint selection highlights redraw immediately.
+  - De-hollow unit tests in `tests/tst_pmx_viewport.cpp`: assert exact bone diamond points, non-zero Euler rotation matrices, sphere radius points, box corner extents, capsule dome apexes, and asymmetric joint limit arcs reflecting RH inverted limits.
+

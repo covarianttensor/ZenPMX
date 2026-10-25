@@ -9,10 +9,10 @@
 * **Project Name:** ZenPMX (Native Linux PMX Editor)
 * **GitHub Repository:** [`https://github.com/covarianttensor/ZenPMX`](https://github.com/covarianttensor/ZenPMX) (Public)
 * **Active Phase:** Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode)
-* **Next Target:** Ticket 3.4 (Wireframe Visualizers for Bones, Rigid Bodies & 6DoF Joints)
-* **Overall Completion Level:** 65%
-* **Current Working Tree:** Clean (`main` branch commit `e72f5d7`)
-* **Test Suite Status:** 7/7 CTest suites passing (114 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.32s)
+* **Next Target:** Ticket 3.5 (Interactive Weight Painting Engine with Heatmap Visualization & Radius/Falloff Brush)
+* **Overall Completion Level:** 70%
+* **Current Working Tree:** Clean (feature commit `1b6afef`)
+* **Test Suite Status:** 7/7 CTest suites passing (119 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.38s)
 
 ---
 
@@ -46,6 +46,7 @@
 | 2026-10-25 01:43 | **Ticket-3.1** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | `2ab3af4` | 7/7 CTest (19/19 QtTest) | ~42k | MMD toon ramp shading, vertical V sampling, .sph/.spa sphere maps, PmxTextureCache, clamp samplers. (Strike 1 resolved). |
 | 2026-10-25 02:04 | **Ticket-3.2** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | `d14666f` | 7/7 CTest (22/22 QtTest) | ~38k | Inverted-hull outline pass, per-vertex/material width scaling, CW front-face culling, QSB deserialization test. (Strike 1 resolved). |
 | 2026-10-25 02:35 | **Ticket-3.3** | Viewport / Models (`PmxViewport` / `PmxModels`) | `pmx_ui_engineer` | `e72f5d7` | 7/7 CTest (31/31 QtTest) | ~45k | Interactive 3D gizmos (Translate/Rotate/Scale), ray picking, snapping, symmetry, sparse undo commands. (Strike 1 resolved). |
+| 2026-10-25 04:18 | **Ticket-3.4** | Viewport / Physics (`PmxViewport`) | `pmx_ui_engineer` | `1b6afef` | 7/7 CTest (36/36 QtTest) | ~44k | Wireframe visualizers for bones (octahedron), rigid bodies (sphere/box/capsule), 6DoF joints (cross/limit arcs/anchors). Strike 1 resolved handedness & selection redraw. |
 
 ---
 
@@ -169,6 +170,18 @@
 * **Corrective Action:**
   - Lead Architect fed exact audit report back to `pmx_ui_engineer` under Strike 1.
   - Subagent instructed to add `std::isfinite()` guards and expand test suite with all mandated boundary assertions.
+
+### Incident 10: Ticket 3.4 Joint Handedness Inversion, Viewport Selection Redraw & Hollow Tests (Strike 1)
+* **Date:** 2026-10-25 04:05 UTC
+* **Subsystem:** `PmxViewport` (`src/viewport/PmxWireframeRenderer.cpp`, `src/viewport/PmxViewportItem.cpp`, `tests/tst_pmx_viewport.cpp`)
+* **Root Cause:**
+  1. Handedness inversion omitted for joint rotational limits in `PmxWireframeRenderer.cpp`: in RH coordinates, angular limits on X and Y must invert bounds ($\min X_{RH} = -\max X_{LH}$, $\max X_{RH} = -\min X_{LH}$, and similarly for Y).
+  2. Viewport selection redraw omitted for rigid bodies and joints in `PmxViewportItem::updateGizmoPosition()`.
+  3. Hollow tests in `tests/tst_pmx_viewport.cpp`: zero Euler rotations tested, missing exact bone diamond base coordinates, missing sphere radius points, box corners, capsule apexes, and asymmetric joint limit checks.
+* **Corrective Action:**
+  - Lead Architect fed exact audit report back to fresh `pmx_ui_engineer` under Strike 1.
+  - Subagent instructed to fix handedness inversion on X and Y joint limits, trigger viewport redraw on all selection changes, and de-hollow the unit test suite.
+
 
 ---
 
