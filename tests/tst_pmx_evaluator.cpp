@@ -37,6 +37,18 @@ private slots:
     void testCcdIkUnreachableTarget();
     void testCcdIkEnableToggle();
     void testEulerAngleDecomposition();
+
+    // Vertex Deformer Tests (Ticket 4.3):
+    void testBdef1Skinning();
+    void testBdef2Skinning();
+    void testBdef4Skinning();
+    void testSdefVolumePreservation();
+    void testMorphPlusSkinningCombination();
+    void testQdefFallback();
+    void testZeroNormalFallback();
+    void testSdefRestPoseIdentity();
+    void testSdefRigidRotationInvariance();
+    void testSdefDifferentialRotationWithBounds();
 };
 
 void TstPmxEvaluator::initTestCase() {
@@ -880,6 +892,389 @@ void TstPmxEvaluator::testEulerAngleDecomposition() {
     QVERIFY(eulerClamped.x <= 1.001f && eulerClamped.x >= -0.001f);
     QVERIFY(eulerClamped.y <= 0.501f && eulerClamped.y >= -0.501f);
     QVERIFY(eulerClamped.z <= 1.001f && eulerClamped.z >= -1.001f);
+}
+
+void TstPmxEvaluator::testBdef1Skinning() {
+    PmxDocument doc;
+    PmxBone bone0;
+    bone0.nameJp = "Bone0";
+    bone0.parentBoneIndex = -1;
+    bone0.position = {0.0f, 0.0f, 0.0f};
+
+    PmxVertex v0;
+    v0.position = {2.0f, 3.0f, 4.0f}; // LH (2, 3, 4) -> RH (2, 3, -4)
+    v0.normal = {0.0f, 1.0f, 0.0f};
+    v0.weightType = WeightType::BDEF1;
+    v0.boneIndices = {0, -1, -1, -1};
+    v0.boneWeights = {1.0f, 0.0f, 0.0f, 0.0f};
+
+    doc.bones = {bone0};
+    doc.vertices = {v0};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Initial rest pose: deformed position matches rest position
+    QVERIFY(glm::distance(scene.deformedPosition(0), glm::vec3(2.0f, 3.0f, -4.0f)) < 1e-5f);
+    QVERIFY(glm::distance(scene.deformedNormal(0), glm::vec3(0.0f, 1.0f, 0.0f)) < 1e-5f);
+
+    // Translate bone by (1, 2, 3) in RH
+    scene.setBoneTransform(0, glm::vec3(1.0f, 2.0f, 3.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.evaluate();
+
+    glm::vec3 expectedPos = glm::vec3(2.0f + 1.0f, 3.0f + 2.0f, -4.0f + 3.0f);
+    QVERIFY(glm::distance(scene.deformedPosition(0), expectedPos) < 1e-5f);
+    // Normal does not change under pure translation
+    QVERIFY(glm::distance(scene.deformedNormal(0), glm::vec3(0.0f, 1.0f, 0.0f)) < 1e-5f);
+}
+
+void TstPmxEvaluator::testBdef2Skinning() {
+    PmxDocument doc;
+    PmxBone boneA;
+    boneA.nameJp = "BoneA";
+    boneA.parentBoneIndex = -1;
+    boneA.position = {0.0f, 0.0f, 0.0f};
+
+    PmxBone boneB;
+    boneB.nameJp = "BoneB";
+    boneB.parentBoneIndex = -1;
+    boneB.position = {0.0f, 0.0f, 0.0f};
+
+    PmxVertex v0;
+    v0.position = {0.0f, 0.0f, 0.0f};
+    v0.normal = {0.0f, 1.0f, 0.0f};
+    v0.weightType = WeightType::BDEF2;
+    v0.boneIndices = {0, 1, -1, -1};
+    v0.boneWeights = {0.5f, 0.5f, 0.0f, 0.0f};
+
+    doc.bones = {boneA, boneB};
+    doc.vertices = {v0};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Bone A translates (0, 2, 0), Bone B translates (0, 0, 0)
+    scene.setBoneTransform(0, glm::vec3(0.0f, 2.0f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.setBoneTransform(1, glm::vec3(0.0f, 0.0f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.evaluate();
+
+    // 50/50 blend moves vertex to (0, 1, 0)
+    QVERIFY(glm::distance(scene.deformedPosition(0), glm::vec3(0.0f, 1.0f, 0.0f)) < 1e-5f);
+}
+
+void TstPmxEvaluator::testBdef4Skinning() {
+    PmxDocument doc;
+    for (int i = 0; i < 4; ++i) {
+        PmxBone b;
+        b.nameJp = QString("Bone%1").arg(i);
+        b.parentBoneIndex = -1;
+        b.position = {0.0f, 0.0f, 0.0f};
+        doc.bones.push_back(b);
+    }
+
+    PmxVertex v0;
+    v0.position = {0.0f, 0.0f, 0.0f};
+    v0.normal = {0.0f, 1.0f, 0.0f};
+    v0.weightType = WeightType::BDEF4;
+    v0.boneIndices = {0, 1, 2, 3};
+    v0.boneWeights = {0.4f, 0.3f, 0.2f, 0.1f};
+    doc.vertices = {v0};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    glm::vec3 t0{1.0f, 0.0f, 0.0f};
+    glm::vec3 t1{0.0f, 2.0f, 0.0f};
+    glm::vec3 t2{0.0f, 0.0f, 3.0f};
+    glm::vec3 t3{4.0f, 4.0f, 4.0f};
+
+    scene.setBoneTransform(0, t0, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.setBoneTransform(1, t1, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.setBoneTransform(2, t2, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.setBoneTransform(3, t3, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.evaluate();
+
+    glm::vec3 expected = 0.4f * t0 + 0.3f * t1 + 0.2f * t2 + 0.1f * t3;
+    QVERIFY(glm::distance(scene.deformedPosition(0), expected) < 1e-5f);
+}
+
+void TstPmxEvaluator::testSdefVolumePreservation() {
+    // Construct 2-bone joint: Bone 0 (parent/upper arm) at (0, 0, 0), Bone 1 (child/forearm) at (0, 1, 0)
+    PmxDocument doc;
+    PmxBone bone0;
+    bone0.nameJp = "UpperArm";
+    bone0.parentBoneIndex = -1;
+    bone0.position = {0.0f, 0.0f, 0.0f};
+
+    PmxBone bone1;
+    bone1.nameJp = "Forearm";
+    bone1.parentBoneIndex = 0;
+    bone1.position = {0.0f, 1.0f, 0.0f};
+
+    doc.bones = {bone0, bone1};
+
+    // Vertex on outer joint surface: rest position (1, 1, 0), normal (1, 0, 0)
+    // Rotation center C is at joint (0, 1, 0)
+    // Distance from C is 1.0
+    // Vertex 0: SDEF
+    PmxVertex vSdef;
+    vSdef.position = {1.0f, 1.0f, 0.0f};
+    vSdef.normal = {1.0f, 0.0f, 0.0f};
+    vSdef.weightType = WeightType::SDEF;
+    vSdef.boneIndices = {0, 1, -1, -1};
+    vSdef.boneWeights = {0.5f, 0.5f, 0.0f, 0.0f};
+    vSdef.sdefC = {0.0f, 1.0f, 0.0f};
+    vSdef.sdefR0 = {0.0f, 0.0f, 0.0f};
+    vSdef.sdefR1 = {0.0f, 0.0f, 0.0f};
+
+    // Vertex 1: BDEF2 with same weights for comparison
+    PmxVertex vBdef2;
+    vBdef2.position = {1.0f, 1.0f, 0.0f};
+    vBdef2.normal = {1.0f, 0.0f, 0.0f};
+    vBdef2.weightType = WeightType::BDEF2;
+    vBdef2.boneIndices = {0, 1, -1, -1};
+    vBdef2.boneWeights = {0.5f, 0.5f, 0.0f, 0.0f};
+
+    doc.vertices = {vSdef, vBdef2};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Rotate forearm (bone 1) by 90 degrees around Z axis
+    glm::quat rotZ90 = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    scene.setBoneTransform(1, glm::vec3(0.0f), rotZ90);
+    scene.evaluate();
+
+    glm::vec3 center = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3 posSdef = scene.deformedPosition(0);
+    glm::vec3 posBdef2 = scene.deformedPosition(1);
+
+    float distSdef = glm::distance(posSdef, center);
+    float distBdef2 = glm::distance(posBdef2, center);
+
+    // Initial radial distance from joint center C is 1.0
+    // SDEF preserves spherical volume: radial distance remains 1.0
+    QVERIFY2(std::abs(distSdef - 1.0f) < 1e-4f,
+             qPrintable(QString("SDEF distance should be 1.0, got %1").arg(distSdef)));
+
+    // BDEF2 collapses: linear midpoint of (1, 0, 0) and (0, 1, 0) has distance sqrt(0.5) ~ 0.7071
+    QVERIFY2(distBdef2 < 0.75f,
+             qPrintable(QString("BDEF2 should exhibit volume collapse (< 0.75), got %1").arg(distBdef2)));
+    QVERIFY(distSdef > distBdef2 + 0.25f);
+}
+
+void TstPmxEvaluator::testMorphPlusSkinningCombination() {
+    PmxDocument doc;
+    PmxBone bone0;
+    bone0.nameJp = "Bone0";
+    bone0.parentBoneIndex = -1;
+    bone0.position = {0.0f, 0.0f, 0.0f};
+    doc.bones = {bone0};
+
+    // Vertex at (1, 0, 0)
+    PmxVertex v0;
+    v0.position = {1.0f, 0.0f, 0.0f};
+    v0.normal = {1.0f, 0.0f, 0.0f};
+    v0.weightType = WeightType::BDEF1;
+    v0.boneIndices = {0, -1, -1, -1};
+    v0.boneWeights = {1.0f, 0.0f, 0.0f, 0.0f};
+    doc.vertices = {v0};
+
+    // Vertex morph offset + (0, 1, 0)
+    PmxMorph morph;
+    morph.nameJp = "MorphY";
+    morph.morphType = 1; // Vertex morph
+    VertexMorphOffset vOff;
+    vOff.vertexIndex = 0;
+    vOff.positionOffset = {0.0f, 1.0f, 0.0f}; // LH (0, 1, 0) -> RH (0, 1, 0)
+    morph.vertexOffsets = {vOff};
+    doc.morphs = {morph};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Apply morph weight = 1.0 and 90 deg rotation around Z
+    scene.setMorphWeight(0, 1.0f);
+    glm::quat rotZ90 = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    scene.setBoneTransform(0, glm::vec3(0.0f), rotZ90);
+    scene.evaluate();
+
+    // Eff position before rotation: (1, 0, 0) + (0, 1, 0) = (1, 1, 0)
+    // Rotated 90 deg around Z: (-1, 1, 0)
+    glm::vec3 expectedPos{-1.0f, 1.0f, 0.0f};
+    QVERIFY(glm::distance(scene.deformedPosition(0), expectedPos) < 1e-4f);
+}
+
+void TstPmxEvaluator::testQdefFallback() {
+    PmxDocument doc;
+    for (int i = 0; i < 4; ++i) {
+        PmxBone b;
+        b.nameJp = QString("Bone%1").arg(i);
+        b.parentBoneIndex = -1;
+        b.position = {0.0f, 0.0f, 0.0f};
+        doc.bones.push_back(b);
+    }
+
+    PmxVertex v0;
+    v0.position = {0.0f, 0.0f, 0.0f};
+    v0.normal = {0.0f, 1.0f, 0.0f};
+    v0.weightType = WeightType::QDEF;
+    v0.boneIndices = {0, 1, 2, 3};
+    v0.boneWeights = {0.25f, 0.25f, 0.25f, 0.25f};
+    doc.vertices = {v0};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    scene.setBoneTransform(0, glm::vec3(4.0f, 0.0f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.setBoneTransform(1, glm::vec3(0.0f, 4.0f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.setBoneTransform(2, glm::vec3(0.0f, 0.0f, 4.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.setBoneTransform(3, glm::vec3(4.0f, 4.0f, 4.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.evaluate();
+
+    // 0.25 * ( (4,0,0) + (0,4,0) + (0,0,4) + (4,4,4) ) = 0.25 * (8, 8, 8) = (2, 2, 2)
+    QVERIFY(glm::distance(scene.deformedPosition(0), glm::vec3(2.0f, 2.0f, 2.0f)) < 1e-5f);
+}
+
+void TstPmxEvaluator::testZeroNormalFallback() {
+    PmxDocument doc;
+    PmxBone b;
+    b.nameJp = "Bone0";
+    b.parentBoneIndex = -1;
+    b.position = {0.0f, 0.0f, 0.0f};
+    doc.bones = {b};
+
+    PmxVertex v0;
+    v0.position = {0.0f, 0.0f, 0.0f};
+    v0.normal = {0.0f, 0.0f, 0.0f}; // Zero normal
+    v0.weightType = WeightType::BDEF1;
+    v0.boneIndices = {0, -1, -1, -1};
+    v0.boneWeights = {1.0f, 0.0f, 0.0f, 0.0f};
+    doc.vertices = {v0};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Fallback normal should be (0, 1, 0)
+    QCOMPARE(scene.deformedNormal(0), glm::vec3(0.0f, 1.0f, 0.0f));
+}
+
+void TstPmxEvaluator::testSdefRestPoseIdentity() {
+    PmxDocument doc;
+    PmxBone b0;
+    b0.position = {0.0f, 0.0f, 0.0f};
+    PmxBone b1;
+    b1.position = {0.0f, 2.0f, 0.0f};
+    doc.bones = {b0, b1};
+
+    PmxVertex v;
+    v.position = {1.5f, 2.5f, -3.5f};
+    v.normal = {0.0f, 1.0f, 0.0f};
+    v.weightType = WeightType::SDEF;
+    v.boneIndices = {0, 1, -1, -1};
+    v.boneWeights = {0.6f, 0.4f, 0.0f, 0.0f};
+    v.sdefC = {0.0f, 1.0f, 0.0f};
+    v.sdefR0 = {-0.4f, 0.0f, 0.0f};
+    v.sdefR1 = {0.6f, 0.0f, 0.0f};
+    doc.vertices = {v};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Rest pose matches rest position exactly
+    glm::vec3 expectedRestPos = PmxRuntimeScene::toRightHanded(v.position);
+    glm::vec3 expectedRestNormal = PmxRuntimeScene::toRightHanded(v.normal);
+    QVERIFY(glm::distance(scene.deformedPosition(0), expectedRestPos) < 1e-5f);
+    QVERIFY(glm::distance(scene.deformedNormal(0), expectedRestNormal) < 1e-5f);
+}
+
+void TstPmxEvaluator::testSdefRigidRotationInvariance() {
+    PmxDocument doc;
+    PmxBone b0;
+    b0.nameJp = "Bone0";
+    b0.parentBoneIndex = -1;
+    b0.position = {0.0f, 0.0f, 0.0f};
+
+    PmxBone b1;
+    b1.nameJp = "Bone1";
+    b1.parentBoneIndex = -1;
+    b1.position = {0.0f, 0.0f, 0.0f};
+
+    doc.bones = {b0, b1};
+
+    PmxVertex v;
+    v.position = {1.0f, 0.0f, 0.0f};
+    v.normal = {0.0f, 1.0f, 0.0f};
+    v.weightType = WeightType::SDEF;
+    v.boneIndices = {0, 1, -1, -1};
+    v.boneWeights = {0.5f, 0.5f, 0.0f, 0.0f};
+    v.sdefC = {0.5f, 0.5f, 0.0f};
+    v.sdefR0 = {0.2f, 0.0f, 0.0f};
+    v.sdefR1 = {-0.2f, 0.0f, 0.0f};
+    doc.vertices = {v};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    glm::quat rotZ90 = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    scene.setBoneTransform(0, glm::vec3(0.0f), rotZ90);
+    scene.setBoneTransform(1, glm::vec3(0.0f), rotZ90);
+    scene.evaluate();
+
+    glm::vec3 expectedPos{0.0f, 1.0f, 0.0f};
+    glm::vec3 actualPos = scene.deformedPosition(0);
+    QVERIFY2(glm::distance(actualPos, expectedPos) < 1e-4f,
+             qPrintable(QString("Rigid rotation invariance failed: got (%1, %2, %3), expected (0, 1, 0)")
+                            .arg(actualPos.x).arg(actualPos.y).arg(actualPos.z)));
+
+    glm::vec3 expectedNormal{-1.0f, 0.0f, 0.0f};
+    glm::vec3 actualNormal = scene.deformedNormal(0);
+    QVERIFY2(glm::distance(actualNormal, expectedNormal) < 1e-4f,
+             qPrintable(QString("Rigid rotation normal failed: got (%1, %2, %3)")
+                            .arg(actualNormal.x).arg(actualNormal.y).arg(actualNormal.z)));
+}
+
+void TstPmxEvaluator::testSdefDifferentialRotationWithBounds() {
+    PmxDocument doc;
+    PmxBone b0;
+    b0.nameJp = "Bone0";
+    b0.parentBoneIndex = -1;
+    b0.position = {0.0f, 0.0f, 0.0f};
+
+    PmxBone b1;
+    b1.nameJp = "Bone1";
+    b1.parentBoneIndex = -1;
+    b1.position = {0.0f, 0.0f, 0.0f};
+
+    doc.bones = {b0, b1};
+
+    PmxVertex v;
+    v.position = {1.0f, 0.0f, 0.0f};
+    v.normal = {0.0f, 1.0f, 0.0f};
+    v.weightType = WeightType::SDEF;
+    v.boneIndices = {0, 1, -1, -1};
+    v.boneWeights = {0.5f, 0.5f, 0.0f, 0.0f};
+    v.sdefC = {0.0f, 0.0f, 0.0f};
+    v.sdefR0 = {0.2f, 0.1f, 0.0f};
+    v.sdefR1 = {-0.2f, -0.1f, 0.0f};
+    doc.vertices = {v};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    glm::quat rotZ90 = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    scene.setBoneTransform(0, glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.setBoneTransform(1, glm::vec3(0.0f), rotZ90);
+    scene.evaluate();
+
+    float s45 = std::sin(glm::radians(45.0f));
+    glm::vec3 expectedPos{s45 + 0.15f, s45 - 0.05f, 0.0f};
+    glm::vec3 actualPos = scene.deformedPosition(0);
+
+    QVERIFY2(glm::distance(actualPos, expectedPos) < 1e-4f,
+             qPrintable(QString("Differential rotation with bounds failed: got (%1, %2, %3), expected (%4, %5, %6)")
+                            .arg(actualPos.x).arg(actualPos.y).arg(actualPos.z)
+                            .arg(expectedPos.x).arg(expectedPos.y).arg(expectedPos.z)));
 }
 
 QTEST_MAIN(TstPmxEvaluator)

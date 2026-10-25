@@ -101,6 +101,8 @@ add_library(PmxEvaluator STATIC
     src/evaluator/MmdCcdIkSolver.cpp
     src/evaluator/PmxRuntimeScene.h
     src/evaluator/PmxRuntimeScene.cpp
+    src/evaluator/PmxVertexDeformer.h
+    src/evaluator/PmxVertexDeformer.cpp
 )
 
 target_include_directories(PmxEvaluator PUBLIC

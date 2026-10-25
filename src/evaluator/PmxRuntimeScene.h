@@ -3,6 +3,7 @@
 #include "core/PmxDocument.h"
 #include "core/PmxTypes.h"
 #include "MmdCcdIkSolver.h"
+#include "PmxVertexDeformer.h"
 
 #include <QString>
 #include <array>
@@ -65,6 +66,7 @@ public:
     void evaluateBones();
     void evaluatePrePhysicsBones();
     void evaluatePostPhysicsBones();
+    void deformVertices();
 
     // Transform & Morph manipulation
     void setBoneTransform(int boneIndex, const glm::vec3& translation, const glm::quat& rotation);
@@ -91,6 +93,15 @@ public:
 
     const std::vector<glm::vec4>& uvOffsets() const { return m_uvOffsets; }
     glm::vec4 uvOffset(int vertexIndex) const;
+
+    // Deformed vertex & normal accessors
+    const std::vector<glm::vec3>& deformedPositions() const { return m_deformedPositions; }
+    const std::vector<glm::vec3>& deformedNormals() const { return m_deformedNormals; }
+    glm::vec3 deformedPosition(int vertexIndex) const;
+    glm::vec3 deformedNormal(int vertexIndex) const;
+
+    const std::vector<RuntimeVertex>& runtimeVertices() const { return m_runtimeVertices; }
+    const RuntimeVertex& runtimeVertex(int vertexIndex) const;
 
     // Material accessors
     const std::vector<EvaluatedMaterial>& evaluatedMaterials() const { return m_evaluatedMaterials; }
@@ -143,6 +154,10 @@ private:
 
     std::vector<glm::vec3> m_vertexOffsets;
     std::vector<glm::vec4> m_uvOffsets;
+
+    std::vector<RuntimeVertex> m_runtimeVertices;
+    std::vector<glm::vec3> m_deformedPositions;
+    std::vector<glm::vec3> m_deformedNormals;
 
     std::vector<PmxMaterial> m_baseMaterials;
     std::vector<EvaluatedMaterial> m_evaluatedMaterials;

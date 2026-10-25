@@ -11,6 +11,7 @@ namespace {
 const glm::mat4 s_identityMatrix{1.0f};
 const RuntimeBone s_dummyBone{};
 const EvaluatedMaterial s_dummyMaterial{};
+const RuntimeVertex s_dummyRuntimeVertex{};
 
 } // namespace
 
@@ -22,6 +23,9 @@ void PmxRuntimeScene::loadDocument(const PmxDocument& doc) {
     m_morphWeights.clear();
     m_vertexOffsets.clear();
     m_uvOffsets.clear();
+    m_runtimeVertices.clear();
+    m_deformedPositions.clear();
+    m_deformedNormals.clear();
     m_baseMaterials.clear();
     m_evaluatedMaterials.clear();
 
@@ -99,8 +103,26 @@ void PmxRuntimeScene::loadDocument(const PmxDocument& doc) {
     m_morphWeights.assign(m_morphs.size(), 0.0f);
 
     // Vertices and UV offsets
-    m_vertexOffsets.assign(doc.vertices.size(), glm::vec3(0.0f));
-    m_uvOffsets.assign(doc.vertices.size(), glm::vec4(0.0f));
+    const size_t numVertices = doc.vertices.size();
+    m_vertexOffsets.assign(numVertices, glm::vec3(0.0f));
+    m_uvOffsets.assign(numVertices, glm::vec4(0.0f));
+
+    m_runtimeVertices.resize(numVertices);
+    m_deformedPositions.resize(numVertices);
+    m_deformedNormals.resize(numVertices);
+
+    for (size_t i = 0; i < numVertices; ++i) {
+        const auto& srcV = doc.vertices[i];
+        auto& dstV = m_runtimeVertices[i];
+        dstV.restPosition = toRightHanded(srcV.position);
+        dstV.restNormal = toRightHanded(srcV.normal);
+        dstV.weightType = srcV.weightType;
+        dstV.boneIndices = srcV.boneIndices;
+        dstV.boneWeights = srcV.boneWeights;
+        dstV.sdefC = toRightHanded(srcV.sdefC);
+        dstV.sdefR0 = toRightHanded(srcV.sdefR0);
+        dstV.sdefR1 = toRightHanded(srcV.sdefR1);
+    }
 
     // Materials
     m_baseMaterials = doc.materials;
@@ -127,6 +149,11 @@ void PmxRuntimeScene::evaluate() {
     evaluatePrePhysicsBones();
     solveIk();
     evaluatePostPhysicsBones();
+    deformVertices();
+}
+
+void PmxRuntimeScene::deformVertices() {
+    PmxVertexDeformer::deformAll(*this, m_runtimeVertices, m_vertexOffsets, m_deformedPositions, m_deformedNormals);
 }
 
 void PmxRuntimeScene::evaluateMorphs() {
@@ -478,6 +505,27 @@ glm::vec4 PmxRuntimeScene::uvOffset(int vertexIndex) const {
         return m_uvOffsets[static_cast<size_t>(vertexIndex)];
     }
     return glm::vec4(0.0f);
+}
+
+glm::vec3 PmxRuntimeScene::deformedPosition(int vertexIndex) const {
+    if (vertexIndex >= 0 && vertexIndex < static_cast<int>(m_deformedPositions.size())) {
+        return m_deformedPositions[static_cast<size_t>(vertexIndex)];
+    }
+    return glm::vec3(0.0f);
+}
+
+glm::vec3 PmxRuntimeScene::deformedNormal(int vertexIndex) const {
+    if (vertexIndex >= 0 && vertexIndex < static_cast<int>(m_deformedNormals.size())) {
+        return m_deformedNormals[static_cast<size_t>(vertexIndex)];
+    }
+    return glm::vec3(0.0f, 1.0f, 0.0f);
+}
+
+const RuntimeVertex& PmxRuntimeScene::runtimeVertex(int vertexIndex) const {
+    if (vertexIndex >= 0 && vertexIndex < static_cast<int>(m_runtimeVertices.size())) {
+        return m_runtimeVertices[static_cast<size_t>(vertexIndex)];
+    }
+    return s_dummyRuntimeVertex;
 }
 
 const EvaluatedMaterial& PmxRuntimeScene::evaluatedMaterial(int materialIndex) const {
