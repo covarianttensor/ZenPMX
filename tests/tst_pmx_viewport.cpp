@@ -15,6 +15,7 @@
 #include "viewport/PmxTextureCache.h"
 #include "viewport/PmxGizmo.h"
 #include "viewport/PmxWireframeRenderer.h"
+#include "viewport/PmxWeightPaintBrush.h"
 
 #include <QSignalSpy>
 #include <QTest>
@@ -67,6 +68,13 @@ private slots:
     void testJointWireframeCrossLimitArcsAndAnchors();
     void testWireframeRendererRobustness();
     void testViewportWireframeToggles();
+    void testWeightToColorGradients();
+    void testBrushFalloffMath();
+    void testApplyBrushToVertexWeights();
+    void testVertexWeightCommandUndoRedo();
+    void testWeightPaintingBoundaryConditions();
+    void testViewportWeightPaintProperties();
+    void testBrushCursorGeneration();
 };
 
 void tst_pmx_viewport::testCameraDefaults() {
@@ -2028,6 +2036,314 @@ void tst_pmx_viewport::testViewportWireframeToggles() {
     QCOMPARE(viewport.showJoints(), true);
     QCOMPARE(rbSpy.count(), 2);
     QCOMPARE(jointSpy.count(), 2);
+}
+
+void tst_pmx_viewport::testWeightToColorGradients() {
+    auto c0 = PmxWeightPaintBrush::weightToColor(0.0f);
+    QCOMPARE(c0, glm::vec4(0.0f, 0.0f, 1.0f, 1.0f));
+
+    auto c0125 = PmxWeightPaintBrush::weightToColor(0.125f);
+    QCOMPARE(c0125, glm::vec4(0.0f, 0.5f, 1.0f, 1.0f));
+
+    auto c025 = PmxWeightPaintBrush::weightToColor(0.25f);
+    QCOMPARE(c025, glm::vec4(0.0f, 1.0f, 1.0f, 1.0f));
+
+    auto c0375 = PmxWeightPaintBrush::weightToColor(0.375f);
+    QCOMPARE(c0375, glm::vec4(0.0f, 1.0f, 0.5f, 1.0f));
+
+    auto c05 = PmxWeightPaintBrush::weightToColor(0.5f);
+    QCOMPARE(c05, glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+
+    auto c0625 = PmxWeightPaintBrush::weightToColor(0.625f);
+    QCOMPARE(c0625, glm::vec4(0.5f, 1.0f, 0.0f, 1.0f));
+
+    auto c075 = PmxWeightPaintBrush::weightToColor(0.75f);
+    QCOMPARE(c075, glm::vec4(1.0f, 1.0f, 0.0f, 1.0f));
+
+    auto c0875 = PmxWeightPaintBrush::weightToColor(0.875f);
+    QCOMPARE(c0875, glm::vec4(1.0f, 0.5f, 0.0f, 1.0f));
+
+    auto c10 = PmxWeightPaintBrush::weightToColor(1.0f);
+    QCOMPARE(c10, glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
+
+    // Out-of-bounds clamp tests
+    auto cNeg = PmxWeightPaintBrush::weightToColor(-0.5f);
+    QCOMPARE(cNeg, glm::vec4(0.0f, 0.0f, 1.0f, 1.0f));
+
+    auto cOver = PmxWeightPaintBrush::weightToColor(1.5f);
+    QCOMPARE(cOver, glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
+
+    auto cNaN = PmxWeightPaintBrush::weightToColor(std::numeric_limits<float>::quiet_NaN());
+    QCOMPARE(cNaN, glm::vec4(0.0f, 0.0f, 1.0f, 1.0f));
+
+    auto cInf = PmxWeightPaintBrush::weightToColor(std::numeric_limits<float>::infinity());
+    QCOMPARE(cInf, glm::vec4(0.0f, 0.0f, 1.0f, 1.0f));
+}
+
+void tst_pmx_viewport::testBrushFalloffMath() {
+    float r = 2.0f;
+
+    // Center (d = 0)
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(0.0f, r, BrushFalloff::Linear), 1.0f);
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(0.0f, r, BrushFalloff::Gaussian), 1.0f);
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(0.0f, r, BrushFalloff::Constant), 1.0f);
+
+    // Midpoint (d = r / 2 = 1.0f)
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(1.0f, r, BrushFalloff::Linear), 0.5f);
+    float expGaussianMid = std::exp(-3.0f * 0.25f);
+    QVERIFY(std::abs(PmxWeightPaintBrush::computeFalloff(1.0f, r, BrushFalloff::Gaussian) - expGaussianMid) < 1e-5f);
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(1.0f, r, BrushFalloff::Constant), 1.0f);
+
+    // Boundary (d >= r)
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(r, r, BrushFalloff::Linear), 0.0f);
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(r + 0.5f, r, BrushFalloff::Linear), 0.0f);
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(r + 0.5f, r, BrushFalloff::Gaussian), 0.0f);
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(r + 0.5f, r, BrushFalloff::Constant), 0.0f);
+
+    // Invalid radius / distance
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(0.5f, 0.0f, BrushFalloff::Linear), 0.0f);
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(0.5f, -1.0f, BrushFalloff::Linear), 0.0f);
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(-0.5f, r, BrushFalloff::Linear), 0.0f);
+}
+
+void tst_pmx_viewport::testApplyBrushToVertexWeights() {
+    // 1. BDEF1: single bone elevation
+    PmxVertex vBdef1;
+    vBdef1.weightType = WeightType::BDEF1;
+    vBdef1.boneIndices = { 10, -1, -1, -1 };
+    vBdef1.boneWeights = { 1.0f, 0.0f, 0.0f, 0.0f };
+
+    // Same bone Add does nothing (already 100%)
+    PmxWeightPaintBrush::applyBrushToVertex(vBdef1, 10, 1.0f, 0.5f, BrushMode::Add);
+    QCOMPARE(vBdef1.weightType, WeightType::BDEF1);
+    QCOMPARE(vBdef1.boneWeights[0], 1.0f);
+
+    // Different bone Add elevates to BDEF2
+    PmxWeightPaintBrush::applyBrushToVertex(vBdef1, 20, 1.0f, 0.3f, BrushMode::Add);
+    QCOMPARE(vBdef1.weightType, WeightType::BDEF2);
+    QCOMPARE(vBdef1.boneIndices[0], 10);
+    QCOMPARE(vBdef1.boneIndices[1], 20);
+    QVERIFY(std::abs(vBdef1.boneWeights[0] - 0.7f) < 1e-5f);
+    QVERIFY(std::abs(vBdef1.boneWeights[1] - 0.3f) < 1e-5f);
+    QVERIFY(std::abs((vBdef1.boneWeights[0] + vBdef1.boneWeights[1]) - 1.0f) < 1e-6f);
+
+    // 2. BDEF2: Add, Subtract, Set
+    PmxWeightPaintBrush::applyBrushToVertex(vBdef1, 20, 0.5f, 0.2f, BrushMode::Add);
+    QVERIFY(std::abs(vBdef1.boneWeights[1] - 0.4f) < 1e-5f);
+    QVERIFY(std::abs(vBdef1.boneWeights[0] - 0.6f) < 1e-5f);
+    QVERIFY(std::abs((vBdef1.boneWeights[0] + vBdef1.boneWeights[1]) - 1.0f) < 1e-6f);
+
+    PmxWeightPaintBrush::applyBrushToVertex(vBdef1, 20, 1.0f, 0.1f, BrushMode::Subtract);
+    QVERIFY(std::abs(vBdef1.boneWeights[1] - 0.3f) < 1e-5f);
+    QVERIFY(std::abs(vBdef1.boneWeights[0] - 0.7f) < 1e-5f);
+    QVERIFY(std::abs((vBdef1.boneWeights[0] + vBdef1.boneWeights[1]) - 1.0f) < 1e-6f);
+
+    PmxWeightPaintBrush::applyBrushToVertex(vBdef1, 20, 1.0f, 0.5f, BrushMode::Set);
+    QVERIFY(std::abs(vBdef1.boneWeights[1] - 0.5f) < 1e-5f);
+    QVERIFY(std::abs(vBdef1.boneWeights[0] - 0.5f) < 1e-5f);
+    QVERIFY(std::abs((vBdef1.boneWeights[0] + vBdef1.boneWeights[1]) - 1.0f) < 1e-6f);
+
+    // 3. SDEF: preserves sdef params
+    PmxVertex vSdef;
+    vSdef.weightType = WeightType::SDEF;
+    vSdef.boneIndices = { 5, 8, -1, -1 };
+    vSdef.boneWeights = { 0.6f, 0.4f, 0.0f, 0.0f };
+    vSdef.sdefC = glm::vec3(1.0f, 2.0f, 3.0f);
+    vSdef.sdefR0 = glm::vec3(0.0f, 1.0f, 0.0f);
+    vSdef.sdefR1 = glm::vec3(0.0f, 0.0f, 1.0f);
+
+    PmxWeightPaintBrush::applyBrushToVertex(vSdef, 5, 1.0f, 0.2f, BrushMode::Add);
+    QCOMPARE(vSdef.weightType, WeightType::SDEF);
+    QVERIFY(std::abs(vSdef.boneWeights[0] - 0.8f) < 1e-5f);
+    QVERIFY(std::abs(vSdef.boneWeights[1] - 0.2f) < 1e-5f);
+    QCOMPARE(vSdef.sdefC, glm::vec3(1.0f, 2.0f, 3.0f));
+    QCOMPARE(vSdef.sdefR0, glm::vec3(0.0f, 1.0f, 0.0f));
+    QCOMPARE(vSdef.sdefR1, glm::vec3(0.0f, 0.0f, 1.0f));
+
+    // 4. BDEF4: normalization sum check
+    PmxVertex vBdef4;
+    vBdef4.weightType = WeightType::BDEF4;
+    vBdef4.boneIndices = { 1, 2, 3, 4 };
+    vBdef4.boneWeights = { 0.4f, 0.3f, 0.2f, 0.1f };
+
+    PmxWeightPaintBrush::applyBrushToVertex(vBdef4, 2, 1.0f, 0.1f, BrushMode::Add);
+    float sumWeights = vBdef4.boneWeights[0] + vBdef4.boneWeights[1] + vBdef4.boneWeights[2] + vBdef4.boneWeights[3];
+    QVERIFY(std::abs(sumWeights - 1.0f) < 1e-6f);
+
+    // Smooth mode on BDEF4
+    PmxWeightPaintBrush::applyBrushToVertex(vBdef4, 1, 1.0f, 0.5f, BrushMode::Smooth);
+    sumWeights = vBdef4.boneWeights[0] + vBdef4.boneWeights[1] + vBdef4.boneWeights[2] + vBdef4.boneWeights[3];
+    QVERIFY(std::abs(sumWeights - 1.0f) < 1e-6f);
+}
+
+void tst_pmx_viewport::testVertexWeightCommandUndoRedo() {
+    PmxDocument doc;
+    PmxVertex v0;
+    v0.weightType = WeightType::BDEF1;
+    v0.boneIndices = { 0, -1, -1, -1 };
+    v0.boneWeights = { 1.0f, 0.0f, 0.0f, 0.0f };
+
+    PmxVertex v1;
+    v1.weightType = WeightType::BDEF2;
+    v1.boneIndices = { 0, 1, -1, -1 };
+    v1.boneWeights = { 0.5f, 0.5f, 0.0f, 0.0f };
+
+    doc.vertices = { v0, v1 };
+
+    PmxDocumentController controller;
+    controller.setDocumentInternal(doc);
+
+    VertexWeightDelta d0;
+    d0.vertexIndex = 0;
+    d0.oldWeightType = WeightType::BDEF1;
+    d0.oldBoneIndices = { 0, -1, -1, -1 };
+    d0.oldBoneWeights = { 1.0f, 0.0f, 0.0f, 0.0f };
+    d0.newWeightType = WeightType::BDEF2;
+    d0.newBoneIndices = { 0, 1, -1, -1 };
+    d0.newBoneWeights = { 0.7f, 0.3f, 0.0f, 0.0f };
+
+    auto* cmd = new PmxVertexWeightCommand(&controller, { d0 }, 2001);
+    controller.undoStack()->push(cmd);
+
+    QCOMPARE(controller.document().vertices[0].weightType, WeightType::BDEF2);
+    QVERIFY(std::abs(controller.document().vertices[0].boneWeights[0] - 0.7f) < 1e-5f);
+
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().vertices[0].weightType, WeightType::BDEF1);
+    QCOMPARE(controller.document().vertices[0].boneWeights[0], 1.0f);
+
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().vertices[0].weightType, WeightType::BDEF2);
+    QVERIFY(std::abs(controller.document().vertices[0].boneWeights[0] - 0.7f) < 1e-5f);
+
+    // Test mergeWith on same drag session ID
+    VertexWeightDelta d0_second;
+    d0_second.vertexIndex = 0;
+    d0_second.oldWeightType = WeightType::BDEF2;
+    d0_second.oldBoneIndices = { 0, 1, -1, -1 };
+    d0_second.oldBoneWeights = { 0.7f, 0.3f, 0.0f, 0.0f };
+    d0_second.newWeightType = WeightType::BDEF2;
+    d0_second.newBoneIndices = { 0, 1, -1, -1 };
+    d0_second.newBoneWeights = { 0.4f, 0.6f, 0.0f, 0.0f };
+
+    auto* cmd2 = new PmxVertexWeightCommand(&controller, { d0_second }, 2001);
+    controller.undoStack()->push(cmd2);
+
+    // Merged: undo restores back to original d0.old (BDEF1)
+    controller.undoStack()->undo();
+    QCOMPARE(controller.document().vertices[0].weightType, WeightType::BDEF1);
+    QCOMPARE(controller.document().vertices[0].boneWeights[0], 1.0f);
+
+    controller.undoStack()->redo();
+    QCOMPARE(controller.document().vertices[0].weightType, WeightType::BDEF2);
+    QVERIFY(std::abs(controller.document().vertices[0].boneWeights[0] - 0.4f) < 1e-5f);
+}
+
+void tst_pmx_viewport::testWeightPaintingBoundaryConditions() {
+    // 1. Zero and negative radius
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(0.5f, 0.0f, BrushFalloff::Linear), 0.0f);
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(0.5f, -2.0f, BrushFalloff::Linear), 0.0f);
+
+    // 2. Strength > 1.0 clamped safely
+    PmxVertex v;
+    v.weightType = WeightType::BDEF2;
+    v.boneIndices = { 1, 2, -1, -1 };
+    v.boneWeights = { 0.5f, 0.5f, 0.0f, 0.0f };
+    PmxWeightPaintBrush::applyBrushToVertex(v, 1, 1.0f, 5.0f, BrushMode::Add);
+    QVERIFY(v.boneWeights[0] <= 1.0f);
+    QVERIFY(std::abs(v.boneWeights[0] + v.boneWeights[1] - 1.0f) < 1e-6f);
+
+    // 3. Unselected bone (-1)
+    QCOMPARE(PmxWeightPaintBrush::getVertexBoneWeight(v, -1), 0.0f);
+    float wBefore = v.boneWeights[0];
+    PmxWeightPaintBrush::applyBrushToVertex(v, -1, 1.0f, 0.5f, BrushMode::Add);
+    QCOMPARE(v.boneWeights[0], wBefore);
+
+    // 4. Empty document raycasting
+    PmxViewportItem viewport;
+    Ray ray;
+    ray.origin = glm::vec3(0.0f, 0.0f, 10.0f);
+    ray.direction = glm::vec3(0.0f, 0.0f, -1.0f);
+    glm::vec3 hitPoint(0.0f), hitNormal(0.0f);
+    QVERIFY(!viewport.raycastMesh(ray, hitPoint, hitNormal));
+
+    // 5. NaN and Inf handling
+    float nanVal = std::numeric_limits<float>::quiet_NaN();
+    float infVal = std::numeric_limits<float>::infinity();
+
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(nanVal, 1.0f, BrushFalloff::Linear), 0.0f);
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(0.5f, nanVal, BrushFalloff::Linear), 0.0f);
+    QCOMPARE(PmxWeightPaintBrush::computeFalloff(infVal, 1.0f, BrushFalloff::Linear), 0.0f);
+
+    PmxVertex vNaN = v;
+    PmxWeightPaintBrush::applyBrushToVertex(vNaN, 1, nanVal, 0.5f, BrushMode::Add);
+    QCOMPARE(vNaN.boneWeights[0], v.boneWeights[0]);
+
+    PmxWeightPaintBrush::applyBrushToVertex(vNaN, 1, 0.5f, nanVal, BrushMode::Add);
+    QCOMPARE(vNaN.boneWeights[0], v.boneWeights[0]);
+}
+
+void tst_pmx_viewport::testViewportWeightPaintProperties() {
+    PmxViewportItem viewport;
+
+    // Viewport Mode
+    QCOMPARE(viewport.viewportMode(), 0);
+    QSignalSpy modeSpy(&viewport, &PmxViewportItem::viewportModeChanged);
+    viewport.setViewportMode(2);
+    QCOMPARE(viewport.viewportMode(), 2);
+    QCOMPARE(modeSpy.count(), 1);
+
+    // Brush Radius
+    QCOMPARE(viewport.brushRadius(), 1.0f);
+    QSignalSpy radiusSpy(&viewport, &PmxViewportItem::brushRadiusChanged);
+    viewport.setBrushRadius(3.5f);
+    QCOMPARE(viewport.brushRadius(), 3.5f);
+    QCOMPARE(radiusSpy.count(), 1);
+
+    // Brush Strength
+    QCOMPARE(viewport.brushStrength(), 0.2f);
+    QSignalSpy strengthSpy(&viewport, &PmxViewportItem::brushStrengthChanged);
+    viewport.setBrushStrength(0.85f);
+    QCOMPARE(viewport.brushStrength(), 0.85f);
+    QCOMPARE(strengthSpy.count(), 1);
+
+    // Brush Mode
+    QCOMPARE(viewport.brushMode(), 0);
+    QSignalSpy brushModeSpy(&viewport, &PmxViewportItem::brushModeChanged);
+    viewport.setBrushMode(1);
+    QCOMPARE(viewport.brushMode(), 1);
+    QCOMPARE(brushModeSpy.count(), 1);
+
+    // Brush Falloff
+    QCOMPARE(viewport.brushFalloff(), 0);
+    QSignalSpy falloffSpy(&viewport, &PmxViewportItem::brushFalloffChanged);
+    viewport.setBrushFalloff(2);
+    QCOMPARE(viewport.brushFalloff(), 2);
+    QCOMPARE(falloffSpy.count(), 1);
+}
+
+void tst_pmx_viewport::testBrushCursorGeneration() {
+    // Valid circle
+    glm::vec3 center(0.0f, 10.0f, -5.0f);
+    glm::vec3 normal(0.0f, 1.0f, 0.0f);
+    float radius = 2.0f;
+    int segments = 32;
+
+    auto cursorLines = PmxWeightPaintBrush::buildBrushCursor(center, normal, radius, segments);
+    QCOMPARE(cursorLines.size(), size_t(segments * 2));
+
+    for (const auto& v : cursorLines) {
+        QVERIFY(std::isfinite(v.position.x));
+        QVERIFY(std::isfinite(v.position.y));
+        QVERIFY(std::isfinite(v.position.z));
+        float dist = glm::distance(v.position, center);
+        QVERIFY(std::abs(dist - radius) < 1e-4f);
+    }
+
+    // Invalid radius returns empty
+    QVERIFY(PmxWeightPaintBrush::buildBrushCursor(center, normal, 0.0f, segments).empty());
+    QVERIFY(PmxWeightPaintBrush::buildBrushCursor(center, normal, -1.0f, segments).empty());
+    QVERIFY(PmxWeightPaintBrush::buildBrushCursor(center, normal, std::numeric_limits<float>::quiet_NaN(), segments).empty());
 }
 
 QTEST_MAIN(tst_pmx_viewport)

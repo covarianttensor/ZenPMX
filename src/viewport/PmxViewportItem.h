@@ -3,6 +3,7 @@
 #include "viewport/PmxCamera.h"
 #include "viewport/PmxTextureCache.h"
 #include "viewport/PmxGizmo.h"
+#include "viewport/PmxWeightPaintBrush.h"
 #include "models/PmxDocumentController.h"
 #include "models/PmxUndoCommands.h"
 
@@ -11,6 +12,7 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <vector>
+#include <unordered_map>
 #include <cstdint>
 
 namespace pmx {
@@ -94,6 +96,7 @@ private:
     QRhiGraphicsPipeline* m_meshPipelineCullBack = nullptr;
     QRhiGraphicsPipeline* m_edgePipeline = nullptr;
     QRhiGraphicsPipeline* m_linePipeline = nullptr;
+    QRhiGraphicsPipeline* m_heatmapPipeline = nullptr;
 
     QRhiBuffer* m_meshVertexBuffer = nullptr;
     QRhiBuffer* m_meshIndexBuffer = nullptr;
@@ -114,6 +117,12 @@ private:
     QRhiBuffer* m_gizmoVertexBuffer = nullptr;
     quint32 m_gizmoVertexCount = 0;
 
+    QRhiBuffer* m_heatmapVertexBuffer = nullptr;
+    quint32 m_heatmapVertexCount = 0;
+
+    QRhiBuffer* m_brushCursorVertexBuffer = nullptr;
+    quint32 m_brushCursorVertexCount = 0;
+
     std::vector<MeshVertex> m_stagedVertices;
     std::vector<uint32_t> m_stagedIndices;
     std::vector<StagedMaterialBatch> m_stagedMaterials;
@@ -122,9 +131,13 @@ private:
     std::vector<LineVertex> m_stagedPhysicsLines;
     std::vector<LineVertex> m_stagedJointLines;
     std::vector<LineVertex> m_stagedGizmoLines;
+    std::vector<LineVertex> m_stagedHeatmapVertices;
+    std::vector<LineVertex> m_stagedBrushCursorLines;
     bool m_meshDataDirty = false;
     bool m_materialsDirty = false;
     bool m_gizmoDirty = false;
+    bool m_heatmapDirty = false;
+    bool m_brushCursorDirty = false;
 
     PmxTextureCache m_textureCache;
 
@@ -137,6 +150,7 @@ private:
     bool m_showRigidBodies = true;
     bool m_showJoints = true;
     bool m_wireframe = false;
+    int m_viewportMode = 0;
     quint64 m_syncedRevision = 0;
     int m_syncedSelectedBone = -1;
     int m_syncedSelectedRigidBody = -1;
@@ -157,6 +171,11 @@ class PmxViewportItem : public QQuickRhiItem {
     Q_PROPERTY(int coordSpace READ coordSpaceInt WRITE setCoordSpaceInt NOTIFY coordSpaceChanged)
     Q_PROPERTY(bool symmetricEditing READ symmetricEditing WRITE setSymmetricEditing NOTIFY symmetricEditingChanged)
     Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
+    Q_PROPERTY(int viewportMode READ viewportMode WRITE setViewportMode NOTIFY viewportModeChanged)
+    Q_PROPERTY(float brushRadius READ brushRadius WRITE setBrushRadius NOTIFY brushRadiusChanged)
+    Q_PROPERTY(float brushStrength READ brushStrength WRITE setBrushStrength NOTIFY brushStrengthChanged)
+    Q_PROPERTY(int brushMode READ brushMode WRITE setBrushMode NOTIFY brushModeChanged)
+    Q_PROPERTY(int brushFalloff READ brushFalloff WRITE setBrushFalloff NOTIFY brushFalloffChanged)
 
 public:
     explicit PmxViewportItem(QQuickItem* parent = nullptr);
@@ -193,6 +212,24 @@ public:
     bool wireframe() const { return m_wireframe; }
     void setWireframe(bool wireframe);
 
+    int viewportMode() const { return m_viewportMode; }
+    void setViewportMode(int mode);
+
+    float brushRadius() const { return m_brushRadius; }
+    void setBrushRadius(float radius);
+
+    float brushStrength() const { return m_brushStrength; }
+    void setBrushStrength(float strength);
+
+    int brushMode() const { return m_brushMode; }
+    void setBrushMode(int mode);
+
+    int brushFalloff() const { return m_brushFalloff; }
+    void setBrushFalloff(int falloff);
+
+    const std::vector<LineVertex>& brushCursorLines() const { return m_brushCursorLines; }
+    bool raycastMesh(const Ray& ray, glm::vec3& outHitPoint, glm::vec3& outHitNormal) const;
+
     GizmoMode gizmoMode() const { return m_gizmo.mode(); }
     void setGizmoMode(GizmoMode mode);
     int gizmoModeInt() const { return static_cast<int>(m_gizmo.mode()); }
@@ -222,6 +259,11 @@ signals:
     void showRigidBodiesChanged();
     void showJointsChanged();
     void wireframeChanged();
+    void viewportModeChanged();
+    void brushRadiusChanged();
+    void brushStrengthChanged();
+    void brushModeChanged();
+    void brushFalloffChanged();
     void gizmoModeChanged();
     void coordSpaceChanged();
     void symmetricEditingChanged();
@@ -246,6 +288,19 @@ private:
     bool m_showRigidBodies = true;
     bool m_showJoints = true;
     bool m_wireframe = false;
+    int m_viewportMode = 0;
+    float m_brushRadius = 1.0f;
+    float m_brushStrength = 0.2f;
+    int m_brushMode = 0;
+    int m_brushFalloff = 0;
+
+    bool m_isPaintingWeights = false;
+    int m_paintSessionId = 0;
+    std::unordered_map<int, VertexWeightDelta> m_paintStrokeDeltas;
+    std::vector<LineVertex> m_brushCursorLines;
+    glm::vec3 m_brushHitPos{0.0f};
+    glm::vec3 m_brushHitNormal{0.0f, 1.0f, 0.0f};
+    bool m_hasBrushHit = false;
 
     PmxGizmo m_gizmo;
     bool m_isGizmoDragging = false;

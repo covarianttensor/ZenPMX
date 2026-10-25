@@ -51,6 +51,7 @@ PmxRhiRenderer::~PmxRhiRenderer() {
     delete m_meshPipelineCullBack;
     delete m_edgePipeline;
     delete m_linePipeline;
+    delete m_heatmapPipeline;
     delete m_meshVertexBuffer;
     delete m_meshIndexBuffer;
     delete m_gridVertexBuffer;
@@ -58,6 +59,8 @@ PmxRhiRenderer::~PmxRhiRenderer() {
     delete m_physicsVertexBuffer;
     delete m_jointVertexBuffer;
     delete m_gizmoVertexBuffer;
+    delete m_heatmapVertexBuffer;
+    delete m_brushCursorVertexBuffer;
 
     m_textureCache.clear();
 }
@@ -204,6 +207,32 @@ void PmxRhiRenderer::initialize(QRhiCommandBuffer* cb) {
         m_linePipeline->create();
     }
 
+    if (!m_heatmapPipeline) {
+        m_heatmapPipeline = rhi()->newGraphicsPipeline();
+        m_heatmapPipeline->setShaderStages({
+            { QRhiShaderStage::Vertex, linesVs },
+            { QRhiShaderStage::Fragment, linesFs }
+        });
+        QRhiVertexInputLayout inputLayout;
+        inputLayout.setBindings({
+            { sizeof(LineVertex) }
+        });
+        inputLayout.setAttributes({
+            { 0, 0, QRhiVertexInputAttribute::Float3, offsetof(LineVertex, position) },
+            { 0, 1, QRhiVertexInputAttribute::Float4, offsetof(LineVertex, color) }
+        });
+        m_heatmapPipeline->setVertexInputLayout(inputLayout);
+        m_heatmapPipeline->setShaderResourceBindings(m_lineSrb);
+        m_heatmapPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_heatmapPipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+        m_heatmapPipeline->setCullMode(QRhiGraphicsPipeline::None);
+        m_heatmapPipeline->setFrontFace(QRhiGraphicsPipeline::CW);
+        m_heatmapPipeline->setDepthTest(true);
+        m_heatmapPipeline->setDepthWrite(true);
+        m_heatmapPipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
+        m_heatmapPipeline->create();
+    }
+
     if (cb) {
         cb->resourceUpdate(u);
     }
@@ -259,6 +288,8 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
     m_showRigidBodies = vp->showRigidBodies();
     m_showJoints = vp->showJoints();
     m_wireframe = vp->wireframe();
+    bool modeChanged = (m_viewportMode != vp->viewportMode());
+    m_viewportMode = vp->viewportMode();
 
     int selBone = -1;
     int selRb = -1;
@@ -276,7 +307,8 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
     if (m_syncedRevision != vp->modelRevision() ||
         m_syncedSelectedBone != selBone ||
         m_syncedSelectedRigidBody != selRb ||
-        m_syncedSelectedJoint != selJoint) {
+        m_syncedSelectedJoint != selJoint ||
+        modeChanged) {
         m_syncedRevision = vp->modelRevision();
         m_syncedSelectedBone = selBone;
         m_syncedSelectedRigidBody = selRb;
@@ -288,6 +320,7 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
         m_stagedBoneLines.clear();
         m_stagedPhysicsLines.clear();
         m_stagedJointLines.clear();
+        m_stagedHeatmapVertices.clear();
 
         if (vp->controller()) {
             const auto& doc = vp->controller()->document();
@@ -297,18 +330,31 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
             m_stagedBoneLines = PmxWireframeRenderer::buildBoneWireframes(doc, selBone);
             m_stagedPhysicsLines = PmxWireframeRenderer::buildRigidBodyWireframes(doc, selRb);
             m_stagedJointLines = PmxWireframeRenderer::buildJointWireframes(doc, selJoint);
+
+            if (m_viewportMode == 2) {
+                m_stagedHeatmapVertices.reserve(doc.vertices.size());
+                for (const auto& v : doc.vertices) {
+                    float w = (selBone >= 0) ? PmxWeightPaintBrush::getVertexBoneWeight(v, selBone) : 0.0f;
+                    glm::vec4 col = PmxWeightPaintBrush::weightToColor(w);
+                    m_stagedHeatmapVertices.push_back({ PmxCamera::toRightHanded(v.position), col });
+                }
+            }
         }
 
         m_meshDataDirty = true;
         m_materialsDirty = true;
+        m_heatmapDirty = true;
     }
 
     m_stagedGizmoLines.clear();
-    if (vp->gizmo()->mode() != GizmoMode::None) {
+    if (vp->gizmo()->mode() != GizmoMode::None && m_viewportMode != 2) {
         float gizmoScale = vp->gizmo()->computeDisplayScale(m_eyePos);
         m_stagedGizmoLines = vp->gizmo()->buildGizmoGeometry(gizmoScale);
     }
     m_gizmoDirty = true;
+
+    m_stagedBrushCursorLines = vp->brushCursorLines();
+    m_brushCursorDirty = true;
 }
 
 void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
@@ -392,6 +438,38 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
             m_gizmoVertexCount = static_cast<quint32>(m_stagedGizmoLines.size());
         } else {
             m_gizmoVertexCount = 0;
+        }
+    }
+
+    if (m_heatmapDirty) {
+        m_heatmapDirty = false;
+        if (!m_stagedHeatmapVertices.empty()) {
+            quint32 hSize = static_cast<quint32>(m_stagedHeatmapVertices.size() * sizeof(LineVertex));
+            if (!m_heatmapVertexBuffer || m_heatmapVertexBuffer->size() != hSize) {
+                delete m_heatmapVertexBuffer;
+                m_heatmapVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, hSize);
+                m_heatmapVertexBuffer->create();
+            }
+            u->uploadStaticBuffer(m_heatmapVertexBuffer, 0, hSize, m_stagedHeatmapVertices.data());
+            m_heatmapVertexCount = static_cast<quint32>(m_stagedHeatmapVertices.size());
+        } else {
+            m_heatmapVertexCount = 0;
+        }
+    }
+
+    if (m_brushCursorDirty) {
+        m_brushCursorDirty = false;
+        if (!m_stagedBrushCursorLines.empty()) {
+            quint32 cSize = static_cast<quint32>(m_stagedBrushCursorLines.size() * sizeof(LineVertex));
+            if (!m_brushCursorVertexBuffer || m_brushCursorVertexBuffer->size() != cSize) {
+                delete m_brushCursorVertexBuffer;
+                m_brushCursorVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, cSize);
+                m_brushCursorVertexBuffer->create();
+            }
+            u->uploadStaticBuffer(m_brushCursorVertexBuffer, 0, cSize, m_stagedBrushCursorLines.data());
+            m_brushCursorVertexCount = static_cast<quint32>(m_stagedBrushCursorLines.size());
+        } else {
+            m_brushCursorVertexCount = 0;
         }
     }
 
@@ -514,32 +592,43 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
         cb->draw(m_gridVertexCount);
     }
 
-    // 2. Mesh Triangles (Partitioned per-material)
-    if (m_meshVertexBuffer && m_meshIndexBuffer && m_meshIndexCount > 0) {
-        QRhiCommandBuffer::VertexInput vInput(m_meshVertexBuffer, 0);
-        cb->setVertexInput(0, 1, &vInput, m_meshIndexBuffer, 0, QRhiCommandBuffer::IndexUInt32);
-
-        for (const auto& gb : m_gpuBatches) {
-            if (gb.staged.indexCount == 0) continue;
-
-            QRhiGraphicsPipeline* pipeline = gb.staged.doubleSided
-                ? m_meshPipelineCullNone
-                : m_meshPipelineCullBack;
-            if (!pipeline) continue;
-
-            cb->setGraphicsPipeline(pipeline);
-            cb->setShaderResources(gb.srb);
-            cb->drawIndexed(gb.staged.indexCount, 1, gb.staged.indexOffset, 0);
+    // 2. Mesh Triangles
+    if (m_viewportMode == 2) {
+        // Weight Paint Heatmap Pass
+        if (m_heatmapVertexBuffer && m_meshIndexBuffer && m_meshIndexCount > 0 && m_heatmapPipeline) {
+            cb->setGraphicsPipeline(m_heatmapPipeline);
+            cb->setShaderResources(m_lineSrb);
+            QRhiCommandBuffer::VertexInput vInput(m_heatmapVertexBuffer, 0);
+            cb->setVertexInput(0, 1, &vInput, m_meshIndexBuffer, 0, QRhiCommandBuffer::IndexUInt32);
+            cb->drawIndexed(m_meshIndexCount);
         }
+    } else {
+        if (m_meshVertexBuffer && m_meshIndexBuffer && m_meshIndexCount > 0) {
+            QRhiCommandBuffer::VertexInput vInput(m_meshVertexBuffer, 0);
+            cb->setVertexInput(0, 1, &vInput, m_meshIndexBuffer, 0, QRhiCommandBuffer::IndexUInt32);
 
-        // 3. Inverted-Hull Edge Outline Pass
-        if (m_edgePipeline) {
             for (const auto& gb : m_gpuBatches) {
-                if (!gb.staged.hasEdge || gb.staged.indexCount == 0) continue;
+                if (gb.staged.indexCount == 0) continue;
 
-                cb->setGraphicsPipeline(m_edgePipeline);
+                QRhiGraphicsPipeline* pipeline = gb.staged.doubleSided
+                    ? m_meshPipelineCullNone
+                    : m_meshPipelineCullBack;
+                if (!pipeline) continue;
+
+                cb->setGraphicsPipeline(pipeline);
                 cb->setShaderResources(gb.srb);
                 cb->drawIndexed(gb.staged.indexCount, 1, gb.staged.indexOffset, 0);
+            }
+
+            // 3. Inverted-Hull Edge Outline Pass
+            if (m_edgePipeline) {
+                for (const auto& gb : m_gpuBatches) {
+                    if (!gb.staged.hasEdge || gb.staged.indexCount == 0) continue;
+
+                    cb->setGraphicsPipeline(m_edgePipeline);
+                    cb->setShaderResources(gb.srb);
+                    cb->drawIndexed(gb.staged.indexCount, 1, gb.staged.indexOffset, 0);
+                }
             }
         }
     }
@@ -578,6 +667,15 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
         QRhiCommandBuffer::VertexInput vInput(m_gizmoVertexBuffer, 0);
         cb->setVertexInput(0, 1, &vInput);
         cb->draw(m_gizmoVertexCount);
+    }
+
+    // 6. Brush Cursor Wireframe Overlay
+    if (m_viewportMode == 2 && m_brushCursorVertexBuffer && m_brushCursorVertexCount > 0 && m_linePipeline) {
+        cb->setGraphicsPipeline(m_linePipeline);
+        cb->setShaderResources(m_lineSrb);
+        QRhiCommandBuffer::VertexInput vInput(m_brushCursorVertexBuffer, 0);
+        cb->setVertexInput(0, 1, &vInput);
+        cb->draw(m_brushCursorVertexCount);
     }
 
     cb->endPass();
@@ -860,6 +958,143 @@ void PmxViewportItem::setSnapEnabled(bool enabled) {
     }
 }
 
+void PmxViewportItem::setViewportMode(int mode) {
+    if (m_viewportMode != mode) {
+        m_viewportMode = mode;
+        if (m_viewportMode != 2) {
+            m_brushCursorLines.clear();
+        }
+        emit viewportModeChanged();
+        update();
+    }
+}
+
+void PmxViewportItem::setBrushRadius(float radius) {
+    if (std::abs(m_brushRadius - radius) > 1e-4f && std::isfinite(radius)) {
+        m_brushRadius = std::max(0.001f, radius);
+        emit brushRadiusChanged();
+        if (m_hasBrushHit && m_viewportMode == 2) {
+            m_brushCursorLines = PmxWeightPaintBrush::buildBrushCursor(m_brushHitPos, m_brushHitNormal, m_brushRadius, 32);
+        }
+        update();
+    }
+}
+
+void PmxViewportItem::setBrushStrength(float strength) {
+    if (std::abs(m_brushStrength - strength) > 1e-4f && std::isfinite(strength)) {
+        m_brushStrength = std::clamp(strength, 0.0f, 1.0f);
+        emit brushStrengthChanged();
+    }
+}
+
+void PmxViewportItem::setBrushMode(int mode) {
+    if (m_brushMode != mode) {
+        m_brushMode = mode;
+        emit brushModeChanged();
+    }
+}
+
+void PmxViewportItem::setBrushFalloff(int falloff) {
+    if (m_brushFalloff != falloff) {
+        m_brushFalloff = falloff;
+        emit brushFalloffChanged();
+    }
+}
+
+static bool rayIntersectsTriangle(
+    const glm::vec3& rayOrigin, const glm::vec3& rayDir,
+    const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2,
+    float& outT, glm::vec3& outHitPoint, glm::vec3& outHitNormal)
+{
+    const float EPSILON = 1e-7f;
+    glm::vec3 edge1 = v1 - v0;
+    glm::vec3 edge2 = v2 - v0;
+    glm::vec3 h = glm::cross(rayDir, edge2);
+    float a = glm::dot(edge1, h);
+
+    if (std::abs(a) < EPSILON) {
+        return false;
+    }
+
+    float f = 1.0f / a;
+    glm::vec3 s = rayOrigin - v0;
+    float u = f * glm::dot(s, h);
+
+    if (u < 0.0f || u > 1.0f) {
+        return false;
+    }
+
+    glm::vec3 q = glm::cross(s, edge1);
+    float v = f * glm::dot(rayDir, q);
+
+    if (v < 0.0f || u + v > 1.0f) {
+        return false;
+    }
+
+    float t = f * glm::dot(edge2, q);
+    if (t > EPSILON && std::isfinite(t)) {
+        outT = t;
+        outHitPoint = rayOrigin + rayDir * t;
+        glm::vec3 n = glm::cross(edge1, edge2);
+        if (glm::length(n) > EPSILON) {
+            outHitNormal = glm::normalize(n);
+            if (a < 0.0f) {
+                outHitNormal = -outHitNormal;
+            }
+        } else {
+            outHitNormal = glm::vec3(0.0f, 1.0f, 0.0f);
+        }
+        return true;
+    }
+
+    return false;
+}
+
+bool PmxViewportItem::raycastMesh(const Ray& ray, glm::vec3& outHitPoint, glm::vec3& outHitNormal) const {
+    if (!m_controller) return false;
+    const auto& doc = m_controller->document();
+    if (doc.vertices.empty() || doc.faceIndices.size() < 3) return false;
+
+    float closestT = std::numeric_limits<float>::infinity();
+    glm::vec3 bestHit(0.0f);
+    glm::vec3 bestNormal(0.0f, 1.0f, 0.0f);
+    bool found = false;
+
+    for (size_t i = 0; i + 2 < doc.faceIndices.size(); i += 3) {
+        int32_t i0 = doc.faceIndices[i];
+        int32_t i1 = doc.faceIndices[i + 1];
+        int32_t i2 = doc.faceIndices[i + 2];
+        if (i0 < 0 || static_cast<size_t>(i0) >= doc.vertices.size() ||
+            i1 < 0 || static_cast<size_t>(i1) >= doc.vertices.size() ||
+            i2 < 0 || static_cast<size_t>(i2) >= doc.vertices.size()) {
+            continue;
+        }
+
+        glm::vec3 v0 = PmxCamera::toRightHanded(doc.vertices[static_cast<size_t>(i0)].position);
+        glm::vec3 v1 = PmxCamera::toRightHanded(doc.vertices[static_cast<size_t>(i1)].position);
+        glm::vec3 v2 = PmxCamera::toRightHanded(doc.vertices[static_cast<size_t>(i2)].position);
+
+        float t = 0.0f;
+        glm::vec3 hit(0.0f);
+        glm::vec3 norm(0.0f);
+        if (rayIntersectsTriangle(ray.origin, ray.direction, v0, v1, v2, t, hit, norm)) {
+            if (t < closestT) {
+                closestT = t;
+                bestHit = hit;
+                bestNormal = norm;
+                found = true;
+            }
+        }
+    }
+
+    if (found) {
+        outHitPoint = bestHit;
+        outHitNormal = bestNormal;
+        return true;
+    }
+    return false;
+}
+
 void PmxViewportItem::updateGizmoPosition() {
     if (!m_controller) return;
 
@@ -902,6 +1137,64 @@ void PmxViewportItem::updateGizmoPosition() {
 
 void PmxViewportItem::mousePressEvent(QMouseEvent* event) {
     m_lastMousePos = event->position();
+
+    if (event->button() == Qt::LeftButton && m_viewportMode == 2 && !(event->modifiers() & Qt::AltModifier) && m_controller) {
+        float w = static_cast<float>(width());
+        float h = static_cast<float>(height());
+        Ray ray = m_camera->screenPointToRay(event->position(), w, h);
+        if (raycastMesh(ray, m_brushHitPos, m_brushHitNormal)) {
+            m_hasBrushHit = true;
+            m_isPaintingWeights = true;
+            m_paintStrokeDeltas.clear();
+            m_paintSessionId++;
+
+            m_brushCursorLines = PmxWeightPaintBrush::buildBrushCursor(m_brushHitPos, m_brushHitNormal, m_brushRadius, 32);
+
+            int activeBone = -1;
+            if (m_controller->selectionManager()) {
+                auto sel = m_controller->selectionManager()->selectedBones();
+                if (!sel.isEmpty()) activeBone = sel.first();
+            }
+
+            if (activeBone >= 0) {
+                auto& doc = m_controller->documentInternal();
+                for (size_t i = 0; i < doc.vertices.size(); ++i) {
+                    glm::vec3 vRH = PmxCamera::toRightHanded(doc.vertices[i].position);
+                    float dist = glm::distance(vRH, m_brushHitPos);
+                    if (dist <= m_brushRadius) {
+                        float factor = PmxWeightPaintBrush::computeFalloff(dist, m_brushRadius, static_cast<BrushFalloff>(m_brushFalloff));
+                        if (factor > 0.0f) {
+                            int vIdx = static_cast<int>(i);
+                            if (m_paintStrokeDeltas.find(vIdx) == m_paintStrokeDeltas.end()) {
+                                VertexWeightDelta d;
+                                d.vertexIndex = vIdx;
+                                d.oldWeightType = doc.vertices[i].weightType;
+                                d.oldBoneIndices = doc.vertices[i].boneIndices;
+                                d.oldBoneWeights = doc.vertices[i].boneWeights;
+                                d.oldSdefC = doc.vertices[i].sdefC;
+                                d.oldSdefR0 = doc.vertices[i].sdefR0;
+                                d.oldSdefR1 = doc.vertices[i].sdefR1;
+                                m_paintStrokeDeltas[vIdx] = d;
+                            }
+                            PmxWeightPaintBrush::applyBrushToVertex(doc.vertices[i], activeBone, factor, m_brushStrength, static_cast<BrushMode>(m_brushMode));
+                            auto& d = m_paintStrokeDeltas[vIdx];
+                            d.newWeightType = doc.vertices[i].weightType;
+                            d.newBoneIndices = doc.vertices[i].boneIndices;
+                            d.newBoneWeights = doc.vertices[i].boneWeights;
+                            d.newSdefC = doc.vertices[i].sdefC;
+                            d.newSdefR0 = doc.vertices[i].sdefR0;
+                            d.newSdefR1 = doc.vertices[i].sdefR1;
+                        }
+                    }
+                }
+                m_modelRevision++;
+                emit modelRevisionChanged();
+            }
+            update();
+            event->accept();
+            return;
+        }
+    }
 
     if (event->button() == Qt::LeftButton && m_gizmo.mode() != GizmoMode::None && m_controller) {
         float w = static_cast<float>(width());
@@ -958,6 +1251,60 @@ void PmxViewportItem::mousePressEvent(QMouseEvent* event) {
 }
 
 void PmxViewportItem::mouseMoveEvent(QMouseEvent* event) {
+    if (m_isPaintingWeights && m_controller) {
+        float w = static_cast<float>(width());
+        float h = static_cast<float>(height());
+        Ray ray = m_camera->screenPointToRay(event->position(), w, h);
+        if (raycastMesh(ray, m_brushHitPos, m_brushHitNormal)) {
+            m_hasBrushHit = true;
+            m_brushCursorLines = PmxWeightPaintBrush::buildBrushCursor(m_brushHitPos, m_brushHitNormal, m_brushRadius, 32);
+
+            int activeBone = -1;
+            if (m_controller->selectionManager()) {
+                auto sel = m_controller->selectionManager()->selectedBones();
+                if (!sel.isEmpty()) activeBone = sel.first();
+            }
+
+            if (activeBone >= 0) {
+                auto& doc = m_controller->documentInternal();
+                for (size_t i = 0; i < doc.vertices.size(); ++i) {
+                    glm::vec3 vRH = PmxCamera::toRightHanded(doc.vertices[i].position);
+                    float dist = glm::distance(vRH, m_brushHitPos);
+                    if (dist <= m_brushRadius) {
+                        float factor = PmxWeightPaintBrush::computeFalloff(dist, m_brushRadius, static_cast<BrushFalloff>(m_brushFalloff));
+                        if (factor > 0.0f) {
+                            int vIdx = static_cast<int>(i);
+                            if (m_paintStrokeDeltas.find(vIdx) == m_paintStrokeDeltas.end()) {
+                                VertexWeightDelta d;
+                                d.vertexIndex = vIdx;
+                                d.oldWeightType = doc.vertices[i].weightType;
+                                d.oldBoneIndices = doc.vertices[i].boneIndices;
+                                d.oldBoneWeights = doc.vertices[i].boneWeights;
+                                d.oldSdefC = doc.vertices[i].sdefC;
+                                d.oldSdefR0 = doc.vertices[i].sdefR0;
+                                d.oldSdefR1 = doc.vertices[i].sdefR1;
+                                m_paintStrokeDeltas[vIdx] = d;
+                            }
+                            PmxWeightPaintBrush::applyBrushToVertex(doc.vertices[i], activeBone, factor, m_brushStrength, static_cast<BrushMode>(m_brushMode));
+                            auto& d = m_paintStrokeDeltas[vIdx];
+                            d.newWeightType = doc.vertices[i].weightType;
+                            d.newBoneIndices = doc.vertices[i].boneIndices;
+                            d.newBoneWeights = doc.vertices[i].boneWeights;
+                            d.newSdefC = doc.vertices[i].sdefC;
+                            d.newSdefR0 = doc.vertices[i].sdefR0;
+                            d.newSdefR1 = doc.vertices[i].sdefR1;
+                        }
+                    }
+                }
+                m_modelRevision++;
+                emit modelRevisionChanged();
+            }
+            update();
+            event->accept();
+            return;
+        }
+    }
+
     if (m_isGizmoDragging && m_controller) {
         float w = static_cast<float>(width());
         float h = static_cast<float>(height());
@@ -1146,6 +1493,26 @@ void PmxViewportItem::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void PmxViewportItem::mouseReleaseEvent(QMouseEvent* event) {
+    if (m_isPaintingWeights) {
+        m_isPaintingWeights = false;
+        if (!m_paintStrokeDeltas.empty() && m_controller) {
+            std::vector<VertexWeightDelta> deltas;
+            deltas.reserve(m_paintStrokeDeltas.size());
+            for (const auto& pair : m_paintStrokeDeltas) {
+                deltas.push_back(pair.second);
+            }
+            int cmdId = PmxVertexWeightCommand::CommandId + (m_paintSessionId & 0xFFFF);
+            auto* cmd = new PmxVertexWeightCommand(m_controller, deltas, cmdId);
+            m_controller->pushCommand(cmd);
+            m_paintStrokeDeltas.clear();
+            m_modelRevision++;
+            emit modelRevisionChanged();
+        }
+        update();
+        event->accept();
+        return;
+    }
+
     if (m_isGizmoDragging) {
         m_isGizmoDragging = false;
         m_gizmo.setActiveAxis(GizmoAxis::None);
@@ -1160,6 +1527,22 @@ void PmxViewportItem::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void PmxViewportItem::hoverMoveEvent(QHoverEvent* event) {
+    if (m_viewportMode == 2) {
+        float w = static_cast<float>(width());
+        float h = static_cast<float>(height());
+        Ray ray = m_camera->screenPointToRay(event->position(), w, h);
+        if (raycastMesh(ray, m_brushHitPos, m_brushHitNormal)) {
+            m_hasBrushHit = true;
+            m_brushCursorLines = PmxWeightPaintBrush::buildBrushCursor(m_brushHitPos, m_brushHitNormal, m_brushRadius, 32);
+        } else {
+            m_hasBrushHit = false;
+            m_brushCursorLines.clear();
+        }
+        update();
+        event->accept();
+        return;
+    }
+
     if (m_gizmo.mode() != GizmoMode::None && !m_isGizmoDragging) {
         float w = static_cast<float>(width());
         float h = static_cast<float>(height());

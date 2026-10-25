@@ -125,6 +125,81 @@ ApplicationWindow {
                 }
             }
 
+            ToolSeparator {}
+
+            Label {
+                text: "Mode:"
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            ComboBox {
+                id: modeCombo
+                model: ["Shaded", "Wireframe", "Weight Paint"]
+                currentIndex: viewport.viewportMode
+                onActivated: function(index) {
+                    viewport.viewportMode = index
+                }
+            }
+
+            RowLayout {
+                visible: viewport.viewportMode === 2
+                spacing: 6
+
+                ToolSeparator {}
+
+                Label {
+                    text: "Brush:"
+                    font.bold: true
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                ComboBox {
+                    id: brushModeCombo
+                    model: ["Add", "Subtract", "Set", "Smooth"]
+                    currentIndex: viewport.brushMode
+                    onActivated: function(index) {
+                        viewport.brushMode = index
+                    }
+                }
+
+                ComboBox {
+                    id: brushFalloffCombo
+                    model: ["Linear", "Gaussian", "Constant"]
+                    currentIndex: viewport.brushFalloff
+                    onActivated: function(index) {
+                        viewport.brushFalloff = index
+                    }
+                }
+
+                Label {
+                    text: "Radius: " + viewport.brushRadius.toFixed(1)
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                Slider {
+                    id: radiusSlider
+                    from: 0.1
+                    to: 20.0
+                    value: viewport.brushRadius
+                    onMoved: viewport.brushRadius = value
+                    implicitWidth: 100
+                }
+
+                Label {
+                    text: "Strength: " + viewport.brushStrength.toFixed(2)
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                Slider {
+                    id: strengthSlider
+                    from: 0.01
+                    to: 1.0
+                    value: viewport.brushStrength
+                    onMoved: viewport.brushStrength = value
+                    implicitWidth: 100
+                }
+            }
+
             Item { Layout.fillWidth: true }
 
             Label {

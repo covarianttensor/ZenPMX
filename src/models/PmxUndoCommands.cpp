@@ -189,4 +189,71 @@ void PmxBoneTransformCommand::apply(bool useNew) {
     }
 }
 
+// PmxVertexWeightCommand
+PmxVertexWeightCommand::PmxVertexWeightCommand(
+    PmxDocumentController* controller,
+    std::vector<VertexWeightDelta> deltas,
+    int commandId,
+    const QString& text,
+    QUndoCommand* parent)
+    : QUndoCommand(text, parent)
+    , m_controller(controller)
+    , m_deltas(std::move(deltas))
+    , m_commandId(commandId)
+{
+}
+
+bool PmxVertexWeightCommand::mergeWith(const QUndoCommand* other) {
+    if (!other || m_commandId == -1 || other->id() != m_commandId) {
+        return false;
+    }
+    const auto* next = dynamic_cast<const PmxVertexWeightCommand*>(other);
+    if (!next) {
+        return false;
+    }
+    for (const auto& nextDelta : next->m_deltas) {
+        auto it = std::find_if(m_deltas.begin(), m_deltas.end(), [&](const VertexWeightDelta& d) {
+            return d.vertexIndex == nextDelta.vertexIndex;
+        });
+        if (it != m_deltas.end()) {
+            it->newWeightType = nextDelta.newWeightType;
+            it->newBoneIndices = nextDelta.newBoneIndices;
+            it->newBoneWeights = nextDelta.newBoneWeights;
+            it->newSdefC = nextDelta.newSdefC;
+            it->newSdefR0 = nextDelta.newSdefR0;
+            it->newSdefR1 = nextDelta.newSdefR1;
+        } else {
+            m_deltas.push_back(nextDelta);
+        }
+    }
+    return true;
+}
+
+void PmxVertexWeightCommand::undo() {
+    apply(false);
+}
+
+void PmxVertexWeightCommand::redo() {
+    apply(true);
+}
+
+void PmxVertexWeightCommand::apply(bool useNew) {
+    if (!m_controller) return;
+    auto& doc = m_controller->documentInternal();
+    for (const auto& d : m_deltas) {
+        if (d.vertexIndex >= 0 && static_cast<size_t>(d.vertexIndex) < doc.vertices.size()) {
+            auto& v = doc.vertices[d.vertexIndex];
+            v.weightType = useNew ? d.newWeightType : d.oldWeightType;
+            v.boneIndices = useNew ? d.newBoneIndices : d.oldBoneIndices;
+            v.boneWeights = useNew ? d.newBoneWeights : d.oldBoneWeights;
+            v.sdefC = useNew ? d.newSdefC : d.oldSdefC;
+            v.sdefR0 = useNew ? d.newSdefR0 : d.oldSdefR0;
+            v.sdefR1 = useNew ? d.newSdefR1 : d.oldSdefR1;
+        }
+    }
+    if (m_controller->vertexModel()) {
+        m_controller->vertexModel()->resetModel();
+    }
+}
+
 } // namespace pmx

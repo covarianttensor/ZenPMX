@@ -143,6 +143,8 @@ add_library(PmxViewport STATIC
     src/viewport/PmxGizmo.cpp
     src/viewport/PmxWireframeRenderer.h
     src/viewport/PmxWireframeRenderer.cpp
+    src/viewport/PmxWeightPaintBrush.h
+    src/viewport/PmxWeightPaintBrush.cpp
 )
 
 target_include_directories(PmxViewport PUBLIC

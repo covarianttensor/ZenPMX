@@ -208,4 +208,46 @@ private:
     int m_commandId = CommandId;
 };
 
+struct VertexWeightDelta {
+    int vertexIndex = -1;
+    WeightType oldWeightType = WeightType::BDEF1;
+    std::array<int32_t, 4> oldBoneIndices{-1, -1, -1, -1};
+    std::array<float, 4> oldBoneWeights{0.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 oldSdefC{0.0f};
+    glm::vec3 oldSdefR0{0.0f};
+    glm::vec3 oldSdefR1{0.0f};
+
+    WeightType newWeightType = WeightType::BDEF1;
+    std::array<int32_t, 4> newBoneIndices{-1, -1, -1, -1};
+    std::array<float, 4> newBoneWeights{0.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 newSdefC{0.0f};
+    glm::vec3 newSdefR0{0.0f};
+    glm::vec3 newSdefR1{0.0f};
+};
+
+class PmxVertexWeightCommand : public QUndoCommand {
+public:
+    static constexpr int CommandId = 1003;
+
+    PmxVertexWeightCommand(PmxDocumentController* controller,
+                           std::vector<VertexWeightDelta> deltas,
+                           int commandId = CommandId,
+                           const QString& text = QStringLiteral("Paint Weights"),
+                           QUndoCommand* parent = nullptr);
+
+    int id() const override { return m_commandId; }
+    bool mergeWith(const QUndoCommand* other) override;
+    void undo() override;
+    void redo() override;
+
+    const std::vector<VertexWeightDelta>& deltas() const { return m_deltas; }
+
+private:
+    void apply(bool useNew);
+
+    PmxDocumentController* m_controller;
+    std::vector<VertexWeightDelta> m_deltas;
+    int m_commandId = CommandId;
+};
+
 } // namespace pmx
