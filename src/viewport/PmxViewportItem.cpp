@@ -1,4 +1,5 @@
 #include "viewport/PmxViewportItem.h"
+#include "models/PmxUndoCommands.h"
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
@@ -53,6 +54,7 @@ PmxRhiRenderer::~PmxRhiRenderer() {
     delete m_meshIndexBuffer;
     delete m_gridVertexBuffer;
     delete m_boneVertexBuffer;
+    delete m_gizmoVertexBuffer;
 
     m_textureCache.clear();
 }
@@ -295,6 +297,13 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
         m_meshDataDirty = true;
         m_materialsDirty = true;
     }
+
+    m_stagedGizmoLines.clear();
+    if (vp->gizmo()->mode() != GizmoMode::None) {
+        float gizmoScale = vp->gizmo()->computeDisplayScale(m_eyePos);
+        m_stagedGizmoLines = vp->gizmo()->buildGizmoGeometry(gizmoScale);
+    }
+    m_gizmoDirty = true;
 }
 
 void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
@@ -336,6 +345,22 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
             m_boneVertexCount = static_cast<quint32>(m_stagedBoneLines.size());
         } else {
             m_boneVertexCount = 0;
+        }
+    }
+
+    if (m_gizmoDirty) {
+        m_gizmoDirty = false;
+        if (!m_stagedGizmoLines.empty()) {
+            quint32 gSize = static_cast<quint32>(m_stagedGizmoLines.size() * sizeof(LineVertex));
+            if (!m_gizmoVertexBuffer || m_gizmoVertexBuffer->size() != gSize) {
+                delete m_gizmoVertexBuffer;
+                m_gizmoVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, gSize);
+                m_gizmoVertexBuffer->create();
+            }
+            u->uploadStaticBuffer(m_gizmoVertexBuffer, 0, gSize, m_stagedGizmoLines.data());
+            m_gizmoVertexCount = static_cast<quint32>(m_stagedGizmoLines.size());
+        } else {
+            m_gizmoVertexCount = 0;
         }
     }
 
@@ -495,6 +520,15 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
         QRhiCommandBuffer::VertexInput vInput(m_boneVertexBuffer, 0);
         cb->setVertexInput(0, 1, &vInput);
         cb->draw(m_boneVertexCount);
+    }
+
+    // 5. Gizmo Overlay
+    if (m_gizmoVertexBuffer && m_gizmoVertexCount > 0 && m_linePipeline) {
+        cb->setGraphicsPipeline(m_linePipeline);
+        cb->setShaderResources(m_lineSrb);
+        QRhiCommandBuffer::VertexInput vInput(m_gizmoVertexBuffer, 0);
+        cb->setVertexInput(0, 1, &vInput);
+        cb->draw(m_gizmoVertexCount);
     }
 
     cb->endPass();
@@ -673,6 +707,9 @@ void PmxViewportItem::setController(pmx::PmxDocumentController* controller) {
         if (m_controller->undoStack()) {
             disconnect(m_controller->undoStack(), &QUndoStack::indexChanged, this, &PmxViewportItem::onDocumentChanged);
         }
+        if (m_controller->selectionManager()) {
+            disconnect(m_controller->selectionManager(), &pmx::PmxSelectionManager::anySelectionChanged, this, &PmxViewportItem::updateGizmoPosition);
+        }
     }
 
     m_controller = controller;
@@ -684,6 +721,9 @@ void PmxViewportItem::setController(pmx::PmxDocumentController* controller) {
         if (m_controller->undoStack()) {
             connect(m_controller->undoStack(), &QUndoStack::indexChanged, this, &PmxViewportItem::onDocumentChanged);
         }
+        if (m_controller->selectionManager()) {
+            connect(m_controller->selectionManager(), &pmx::PmxSelectionManager::anySelectionChanged, this, &PmxViewportItem::updateGizmoPosition);
+        }
     }
 
     onDocumentChanged();
@@ -693,6 +733,7 @@ void PmxViewportItem::setController(pmx::PmxDocumentController* controller) {
 void PmxViewportItem::onDocumentChanged() {
     m_modelRevision++;
     emit modelRevisionChanged();
+    updateGizmoPosition();
     update();
 }
 
@@ -720,8 +761,128 @@ void PmxViewportItem::setWireframe(bool wireframe) {
     }
 }
 
+void PmxViewportItem::setGizmoMode(GizmoMode mode) {
+    if (m_gizmo.mode() != mode) {
+        m_gizmo.setMode(mode);
+        emit gizmoModeChanged();
+        updateGizmoPosition();
+        update();
+    }
+}
+
+void PmxViewportItem::setCoordSpace(CoordSpace space) {
+    if (m_gizmo.coordSpace() != space) {
+        m_gizmo.setCoordSpace(space);
+        emit coordSpaceChanged();
+        updateGizmoPosition();
+        update();
+    }
+}
+
+void PmxViewportItem::setSymmetricEditing(bool enabled) {
+    if (m_gizmo.symmetricEditing() != enabled) {
+        m_gizmo.setSymmetricEditing(enabled);
+        emit symmetricEditingChanged();
+        update();
+    }
+}
+
+void PmxViewportItem::setSnapEnabled(bool enabled) {
+    if (m_gizmo.snapEnabled() != enabled) {
+        m_gizmo.setSnapEnabled(enabled);
+        emit snapEnabledChanged();
+        update();
+    }
+}
+
+void PmxViewportItem::updateGizmoPosition() {
+    if (!m_controller) return;
+
+    const auto& doc = m_controller->document();
+    const auto selectedBones = m_controller->selectionManager()->selectedBones();
+    const auto selectedVertices = m_controller->selectionManager()->selectedVertices();
+
+    if (!selectedBones.empty()) {
+        glm::vec3 sum(0.0f);
+        int validCount = 0;
+        for (int bIdx : selectedBones) {
+            if (bIdx >= 0 && static_cast<size_t>(bIdx) < doc.bones.size()) {
+                sum += doc.bones[bIdx].position;
+                validCount++;
+            }
+        }
+        if (validCount > 0) {
+            glm::vec3 centroidLH = sum / static_cast<float>(validCount);
+            m_gizmo.setPosition(PmxCamera::toRightHanded(centroidLH));
+            m_gizmo.setRotation(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+            update();
+        }
+    } else if (!selectedVertices.empty()) {
+        glm::vec3 sum(0.0f);
+        int validCount = 0;
+        for (int vIdx : selectedVertices) {
+            if (vIdx >= 0 && static_cast<size_t>(vIdx) < doc.vertices.size()) {
+                sum += doc.vertices[vIdx].position;
+                validCount++;
+            }
+        }
+        if (validCount > 0) {
+            glm::vec3 centroidLH = sum / static_cast<float>(validCount);
+            m_gizmo.setPosition(PmxCamera::toRightHanded(centroidLH));
+            m_gizmo.setRotation(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+            update();
+        }
+    }
+}
+
 void PmxViewportItem::mousePressEvent(QMouseEvent* event) {
     m_lastMousePos = event->position();
+
+    if (event->button() == Qt::LeftButton && m_gizmo.mode() != GizmoMode::None && m_controller) {
+        float w = static_cast<float>(width());
+        float h = static_cast<float>(height());
+        Ray ray = m_camera->screenPointToRay(event->position(), w, h);
+        float gizmoScale = m_gizmo.computeDisplayScale(m_camera->eyePosition());
+        GizmoAxis hit = m_gizmo.hitTest(ray.origin, ray.direction, gizmoScale);
+        if (hit != GizmoAxis::None) {
+            m_isGizmoDragging = true;
+            m_gizmo.setActiveAxis(hit);
+            m_dragStartRay = ray;
+            m_dragLastRay = ray;
+            m_dragStartGizmoPos = m_gizmo.position();
+            m_dragSessionId++;
+
+            const auto& doc = m_controller->document();
+            const auto selBones = m_controller->selectionManager()->selectedBones();
+            const auto selVerts = m_controller->selectionManager()->selectedVertices();
+
+            m_dragSelectedBoneIndices.clear();
+            m_dragOriginalBonePositions.clear();
+            m_dragSelectedVertexIndices.clear();
+            m_dragOriginalVertexPositions.clear();
+            m_dragOriginalVertexNormals.clear();
+
+            if (!selBones.empty()) {
+                for (int bIdx : selBones) {
+                    if (bIdx >= 0 && static_cast<size_t>(bIdx) < doc.bones.size()) {
+                        m_dragSelectedBoneIndices.push_back(bIdx);
+                        m_dragOriginalBonePositions.push_back(doc.bones[bIdx].position);
+                    }
+                }
+            } else if (!selVerts.empty()) {
+                for (int vIdx : selVerts) {
+                    if (vIdx >= 0 && static_cast<size_t>(vIdx) < doc.vertices.size()) {
+                        m_dragSelectedVertexIndices.push_back(vIdx);
+                        m_dragOriginalVertexPositions.push_back(doc.vertices[vIdx].position);
+                        m_dragOriginalVertexNormals.push_back(doc.vertices[vIdx].normal);
+                    }
+                }
+            }
+            event->accept();
+            return;
+        }
+    }
+
     if (event->button() == Qt::MiddleButton && (event->modifiers() & Qt::ShiftModifier)) {
         m_isPanning = true;
     } else if (event->button() == Qt::MiddleButton ||
@@ -732,6 +893,178 @@ void PmxViewportItem::mousePressEvent(QMouseEvent* event) {
 }
 
 void PmxViewportItem::mouseMoveEvent(QMouseEvent* event) {
+    if (m_isGizmoDragging && m_controller) {
+        float w = static_cast<float>(width());
+        float h = static_cast<float>(height());
+        Ray ray = m_camera->screenPointToRay(event->position(), w, h);
+        float gizmoScale = m_gizmo.computeDisplayScale(m_camera->eyePosition());
+        bool snap = m_gizmo.snapEnabled();
+        int cmdId = PmxVertexTransformCommand::CommandId + (m_dragSessionId & 0xFFFF);
+        const auto& doc = m_controller->document();
+
+        glm::vec3 deltaRH(0.0f);
+        glm::quat rotRH(1.0f, 0.0f, 0.0f, 0.0f);
+        glm::vec3 scale(1.0f);
+
+        if (m_gizmo.mode() == GizmoMode::Translate) {
+            deltaRH = m_gizmo.computeTranslationDelta(
+                m_gizmo.activeAxis(),
+                ray.origin, ray.direction,
+                m_dragStartRay.origin, m_dragStartRay.direction,
+                gizmoScale, snap
+            );
+        } else if (m_gizmo.mode() == GizmoMode::Rotate) {
+            rotRH = m_gizmo.computeRotationDelta(
+                m_gizmo.activeAxis(),
+                ray.origin, ray.direction,
+                m_dragStartRay.origin, m_dragStartRay.direction,
+                gizmoScale, snap
+            );
+        } else if (m_gizmo.mode() == GizmoMode::Scale) {
+            scale = m_gizmo.computeScaleDelta(
+                m_gizmo.activeAxis(),
+                ray.origin, ray.direction,
+                m_dragStartRay.origin, m_dragStartRay.direction,
+                gizmoScale, snap
+            );
+        }
+
+        if (!m_dragSelectedBoneIndices.empty()) {
+            std::vector<BoneTransformDelta> deltas;
+            std::vector<int> handledBones;
+
+            for (size_t i = 0; i < m_dragSelectedBoneIndices.size(); ++i) {
+                int bIdx = m_dragSelectedBoneIndices[i];
+                glm::vec3 origLH = m_dragOriginalBonePositions[i];
+                glm::vec3 origRH = PmxCamera::toRightHanded(origLH);
+                glm::vec3 newRH = origRH;
+
+                if (m_gizmo.mode() == GizmoMode::Translate) {
+                    newRH = origRH + deltaRH;
+                } else if (m_gizmo.mode() == GizmoMode::Rotate) {
+                    newRH = m_dragStartGizmoPos + rotRH * (origRH - m_dragStartGizmoPos);
+                } else if (m_gizmo.mode() == GizmoMode::Scale) {
+                    newRH = m_dragStartGizmoPos + scale * (origRH - m_dragStartGizmoPos);
+                }
+
+                glm::vec3 newLH = PmxCamera::toLeftHanded(newRH);
+                if (m_gizmo.symmetricEditing() && std::abs(origLH.x) < 0.005f) {
+                    newLH.x = origLH.x;
+                }
+
+                BoneTransformDelta d;
+                d.boneIndex = bIdx;
+                d.oldPos = origLH;
+                d.newPos = newLH;
+                deltas.push_back(d);
+                handledBones.push_back(bIdx);
+
+                if (m_gizmo.symmetricEditing()) {
+                    int symIdx = PmxGizmo::findSymmetricBone(doc, bIdx);
+                    if (symIdx >= 0 && symIdx != bIdx &&
+                        std::find(m_dragSelectedBoneIndices.begin(), m_dragSelectedBoneIndices.end(), symIdx) == m_dragSelectedBoneIndices.end() &&
+                        std::find(handledBones.begin(), handledBones.end(), symIdx) == handledBones.end()) {
+                        glm::vec3 symOrigLH = doc.bones[symIdx].position;
+                        glm::vec3 deltaLH = newLH - origLH;
+                        glm::vec3 symDeltaLH = PmxGizmo::mirrorDelta(deltaLH);
+
+                        BoneTransformDelta symD;
+                        symD.boneIndex = symIdx;
+                        symD.oldPos = symOrigLH;
+                        symD.newPos = symOrigLH + symDeltaLH;
+                        deltas.push_back(symD);
+                        handledBones.push_back(symIdx);
+                    }
+                }
+            }
+
+            if (!deltas.empty()) {
+                auto* cmd = new PmxBoneTransformCommand(m_controller, deltas, cmdId);
+                m_controller->pushCommand(cmd);
+                if (m_gizmo.mode() == GizmoMode::Translate) {
+                    m_gizmo.setPosition(m_dragStartGizmoPos + deltaRH);
+                }
+                m_modelRevision++;
+                emit modelRevisionChanged();
+                update();
+            }
+        } else if (!m_dragSelectedVertexIndices.empty()) {
+            std::vector<VertexTransformDelta> deltas;
+            std::vector<int> handledVertices;
+
+            for (size_t i = 0; i < m_dragSelectedVertexIndices.size(); ++i) {
+                int vIdx = m_dragSelectedVertexIndices[i];
+                glm::vec3 origLH = m_dragOriginalVertexPositions[i];
+                glm::vec3 origNormLH = m_dragOriginalVertexNormals[i];
+                glm::vec3 origRH = PmxCamera::toRightHanded(origLH);
+                glm::vec3 origNormRH = PmxCamera::toRightHanded(origNormLH);
+
+                glm::vec3 newRH = origRH;
+                glm::vec3 newNormRH = origNormRH;
+
+                if (m_gizmo.mode() == GizmoMode::Translate) {
+                    newRH = origRH + deltaRH;
+                } else if (m_gizmo.mode() == GizmoMode::Rotate) {
+                    newRH = m_dragStartGizmoPos + rotRH * (origRH - m_dragStartGizmoPos);
+                    newNormRH = rotRH * origNormRH;
+                } else if (m_gizmo.mode() == GizmoMode::Scale) {
+                    newRH = m_dragStartGizmoPos + scale * (origRH - m_dragStartGizmoPos);
+                }
+
+                glm::vec3 newLH = PmxCamera::toLeftHanded(newRH);
+                glm::vec3 newNormLH = PmxCamera::toLeftHanded(newNormRH);
+
+                if (m_gizmo.symmetricEditing() && std::abs(origLH.x) < 0.005f) {
+                    newLH.x = origLH.x;
+                    newNormLH.x = 0.0f;
+                }
+
+                VertexTransformDelta d;
+                d.vertexIndex = vIdx;
+                d.oldPos = origLH;
+                d.newPos = newLH;
+                d.oldNormal = origNormLH;
+                d.newNormal = newNormLH;
+                deltas.push_back(d);
+                handledVertices.push_back(vIdx);
+
+                if (m_gizmo.symmetricEditing()) {
+                    int symIdx = PmxGizmo::findSymmetricVertex(doc, vIdx);
+                    if (symIdx >= 0 && symIdx != vIdx &&
+                        std::find(m_dragSelectedVertexIndices.begin(), m_dragSelectedVertexIndices.end(), symIdx) == m_dragSelectedVertexIndices.end() &&
+                        std::find(handledVertices.begin(), handledVertices.end(), symIdx) == handledVertices.end()) {
+                        glm::vec3 symOrigLH = doc.vertices[symIdx].position;
+                        glm::vec3 symOrigNormLH = doc.vertices[symIdx].normal;
+                        glm::vec3 deltaLH = newLH - origLH;
+                        glm::vec3 symDeltaLH = PmxGizmo::mirrorDelta(deltaLH);
+
+                        VertexTransformDelta symD;
+                        symD.vertexIndex = symIdx;
+                        symD.oldPos = symOrigLH;
+                        symD.newPos = symOrigLH + symDeltaLH;
+                        symD.oldNormal = symOrigNormLH;
+                        symD.newNormal = glm::vec3(-newNormLH.x, newNormLH.y, newNormLH.z);
+                        deltas.push_back(symD);
+                        handledVertices.push_back(symIdx);
+                    }
+                }
+            }
+
+            if (!deltas.empty()) {
+                auto* cmd = new PmxVertexTransformCommand(m_controller, deltas, cmdId);
+                m_controller->pushCommand(cmd);
+                if (m_gizmo.mode() == GizmoMode::Translate) {
+                    m_gizmo.setPosition(m_dragStartGizmoPos + deltaRH);
+                }
+                m_modelRevision++;
+                emit modelRevisionChanged();
+                update();
+            }
+        }
+        event->accept();
+        return;
+    }
+
     QPointF currentPos = event->position();
     float dx = static_cast<float>(currentPos.x() - m_lastMousePos.x());
     float dy = static_cast<float>(currentPos.y() - m_lastMousePos.y());
@@ -748,8 +1081,31 @@ void PmxViewportItem::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void PmxViewportItem::mouseReleaseEvent(QMouseEvent* event) {
+    if (m_isGizmoDragging) {
+        m_isGizmoDragging = false;
+        m_gizmo.setActiveAxis(GizmoAxis::None);
+        updateGizmoPosition();
+        update();
+        event->accept();
+        return;
+    }
     m_isPanning = false;
     m_isOrbiting = false;
+    event->accept();
+}
+
+void PmxViewportItem::hoverMoveEvent(QHoverEvent* event) {
+    if (m_gizmo.mode() != GizmoMode::None && !m_isGizmoDragging) {
+        float w = static_cast<float>(width());
+        float h = static_cast<float>(height());
+        Ray ray = m_camera->screenPointToRay(event->position(), w, h);
+        float gizmoScale = m_gizmo.computeDisplayScale(m_camera->eyePosition());
+        GizmoAxis hit = m_gizmo.hitTest(ray.origin, ray.direction, gizmoScale);
+        if (hit != m_gizmo.hoveredAxis()) {
+            m_gizmo.setHoveredAxis(hit);
+            update();
+        }
+    }
     event->accept();
 }
 

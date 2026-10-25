@@ -139,6 +139,8 @@ add_library(PmxViewport STATIC
     src/viewport/PmxViewportItem.cpp
     src/viewport/PmxTextureCache.h
     src/viewport/PmxTextureCache.cpp
+    src/viewport/PmxGizmo.h
+    src/viewport/PmxGizmo.cpp
 )
 
 target_include_directories(PmxViewport PUBLIC

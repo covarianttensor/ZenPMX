@@ -2,7 +2,9 @@
 
 #include "viewport/PmxCamera.h"
 #include "viewport/PmxTextureCache.h"
+#include "viewport/PmxGizmo.h"
 #include "models/PmxDocumentController.h"
+#include "models/PmxUndoCommands.h"
 
 #include <QtQuick/qquickrhiitem.h>
 #include <rhi/qrhi.h>
@@ -53,10 +55,6 @@ public:
     void buildGrid(QRhiCommandBuffer* cb);
 
 private:
-    struct LineVertex {
-        glm::vec3 position;
-        glm::vec4 color;
-    };
 
     struct FrameAndMaterialUboData {
         glm::mat4 mvp{1.0f};
@@ -107,13 +105,18 @@ private:
     QRhiBuffer* m_boneVertexBuffer = nullptr;
     quint32 m_boneVertexCount = 0;
 
+    QRhiBuffer* m_gizmoVertexBuffer = nullptr;
+    quint32 m_gizmoVertexCount = 0;
+
     std::vector<MeshVertex> m_stagedVertices;
     std::vector<uint32_t> m_stagedIndices;
     std::vector<StagedMaterialBatch> m_stagedMaterials;
     std::vector<GpuMaterialBatch> m_gpuBatches;
     std::vector<LineVertex> m_stagedBoneLines;
+    std::vector<LineVertex> m_stagedGizmoLines;
     bool m_meshDataDirty = false;
     bool m_materialsDirty = false;
+    bool m_gizmoDirty = false;
 
     PmxTextureCache m_textureCache;
 
@@ -135,6 +138,10 @@ class PmxViewportItem : public QQuickRhiItem {
     Q_PROPERTY(bool showGrid READ showGrid WRITE setShowGrid NOTIFY showGridChanged)
     Q_PROPERTY(bool showBones READ showBones WRITE setShowBones NOTIFY showBonesChanged)
     Q_PROPERTY(bool wireframe READ wireframe WRITE setWireframe NOTIFY wireframeChanged)
+    Q_PROPERTY(int gizmoMode READ gizmoModeInt WRITE setGizmoModeInt NOTIFY gizmoModeChanged)
+    Q_PROPERTY(int coordSpace READ coordSpaceInt WRITE setCoordSpaceInt NOTIFY coordSpaceChanged)
+    Q_PROPERTY(bool symmetricEditing READ symmetricEditing WRITE setSymmetricEditing NOTIFY symmetricEditingChanged)
+    Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
 
 public:
     explicit PmxViewportItem(QQuickItem* parent = nullptr);
@@ -165,12 +172,37 @@ public:
     bool wireframe() const { return m_wireframe; }
     void setWireframe(bool wireframe);
 
+    GizmoMode gizmoMode() const { return m_gizmo.mode(); }
+    void setGizmoMode(GizmoMode mode);
+    int gizmoModeInt() const { return static_cast<int>(m_gizmo.mode()); }
+    void setGizmoModeInt(int m) { setGizmoMode(static_cast<GizmoMode>(m)); }
+
+    CoordSpace coordSpace() const { return m_gizmo.coordSpace(); }
+    void setCoordSpace(CoordSpace space);
+    int coordSpaceInt() const { return static_cast<int>(m_gizmo.coordSpace()); }
+    void setCoordSpaceInt(int s) { setCoordSpace(static_cast<CoordSpace>(s)); }
+
+    bool symmetricEditing() const { return m_gizmo.symmetricEditing(); }
+    void setSymmetricEditing(bool enabled);
+
+    bool snapEnabled() const { return m_gizmo.snapEnabled(); }
+    void setSnapEnabled(bool enabled);
+
+    PmxGizmo* gizmo() { return &m_gizmo; }
+    const PmxGizmo* gizmo() const { return &m_gizmo; }
+
+    void updateGizmoPosition();
+
 signals:
     void controllerChanged();
     void modelRevisionChanged();
     void showGridChanged();
     void showBonesChanged();
     void wireframeChanged();
+    void gizmoModeChanged();
+    void coordSpaceChanged();
+    void symmetricEditingChanged();
+    void snapEnabledChanged();
 
 public slots:
     void onDocumentChanged();
@@ -180,6 +212,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void hoverMoveEvent(QHoverEvent* event) override;
 
 private:
     pmx::PmxDocumentController* m_controller = nullptr;
@@ -188,6 +221,18 @@ private:
     bool m_showGrid = true;
     bool m_showBones = true;
     bool m_wireframe = false;
+
+    PmxGizmo m_gizmo;
+    bool m_isGizmoDragging = false;
+    Ray m_dragStartRay;
+    Ray m_dragLastRay;
+    glm::vec3 m_dragStartGizmoPos{0.0f};
+    int m_dragSessionId = 0;
+    std::vector<int> m_dragSelectedVertexIndices;
+    std::vector<glm::vec3> m_dragOriginalVertexPositions;
+    std::vector<glm::vec3> m_dragOriginalVertexNormals;
+    std::vector<int> m_dragSelectedBoneIndices;
+    std::vector<glm::vec3> m_dragOriginalBonePositions;
 
     bool m_isOrbiting = false;
     bool m_isPanning = false;

@@ -144,4 +144,68 @@ private:
 
 using PmxBatchMaterialOperationCommand = PmxBatchOperationCommand;
 
+struct VertexTransformDelta {
+    int vertexIndex = -1;
+    glm::vec3 oldPos{0.0f};
+    glm::vec3 newPos{0.0f};
+    glm::vec3 oldNormal{0.0f};
+    glm::vec3 newNormal{0.0f};
+};
+
+class PmxVertexTransformCommand : public QUndoCommand {
+public:
+    static constexpr int CommandId = 1001;
+
+    PmxVertexTransformCommand(PmxDocumentController* controller,
+                              std::vector<VertexTransformDelta> deltas,
+                              int commandId = CommandId,
+                              const QString& text = QStringLiteral("Transform Vertices"),
+                              QUndoCommand* parent = nullptr);
+
+    int id() const override { return m_commandId; }
+    bool mergeWith(const QUndoCommand* other) override;
+    void undo() override;
+    void redo() override;
+
+    const std::vector<VertexTransformDelta>& deltas() const { return m_deltas; }
+
+private:
+    void apply(bool useNew);
+
+    PmxDocumentController* m_controller;
+    std::vector<VertexTransformDelta> m_deltas;
+    int m_commandId = CommandId;
+};
+
+struct BoneTransformDelta {
+    int boneIndex = -1;
+    glm::vec3 oldPos{0.0f};
+    glm::vec3 newPos{0.0f};
+};
+
+class PmxBoneTransformCommand : public QUndoCommand {
+public:
+    static constexpr int CommandId = 1002;
+
+    PmxBoneTransformCommand(PmxDocumentController* controller,
+                            std::vector<BoneTransformDelta> deltas,
+                            int commandId = CommandId,
+                            const QString& text = QStringLiteral("Transform Bones"),
+                            QUndoCommand* parent = nullptr);
+
+    int id() const override { return m_commandId; }
+    bool mergeWith(const QUndoCommand* other) override;
+    void undo() override;
+    void redo() override;
+
+    const std::vector<BoneTransformDelta>& deltas() const { return m_deltas; }
+
+private:
+    void apply(bool useNew);
+
+    PmxDocumentController* m_controller;
+    std::vector<BoneTransformDelta> m_deltas;
+    int m_commandId = CommandId;
+};
+
 } // namespace pmx

@@ -13,6 +13,7 @@
 #include "models/PmxUndoCommands.h"
 
 #include "viewport/PmxTextureCache.h"
+#include "viewport/PmxGizmo.h"
 
 #include <QSignalSpy>
 #include <QTest>
@@ -21,6 +22,9 @@
 #include <rhi/qshader.h>
 #include <cmath>
 #include <limits>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 using namespace pmx;
 
@@ -48,6 +52,15 @@ private slots:
     void testTextureCacheFallbacks();
     void testMaterialBatchPartitioning();
     void testEdgeMaterialBatchFiltering();
+    void testScreenPointToRay();
+    void testGizmoHitTest();
+    void testGizmoTranslationDeltaAndSnapping();
+    void testGizmoRotationAndScaleDelta();
+    void testSymmetricVertexAndMirroring();
+    void testSymmetricBoneMatching();
+    void testVertexTransformCommandUndoRedo();
+    void testBoneTransformCommandUndoRedo();
+    void testViewportGizmoIntegration();
 };
 
 void tst_pmx_viewport::testCameraDefaults() {
@@ -1010,6 +1023,487 @@ void tst_pmx_viewport::testEdgeMaterialBatchFiltering() {
     auto emptyBatches = PmxViewportItem::partitionMaterialBatches(emptyMatDoc, emptyIndices);
     QCOMPARE(emptyBatches.size(), 1u);
     QVERIFY(!emptyBatches[0].hasEdge);
+}
+
+void tst_pmx_viewport::testScreenPointToRay() {
+    PmxCamera camera;
+    camera.setTarget(glm::vec3(0.0f, 10.0f, 0.0f));
+    camera.setDistance(20.0f);
+    camera.setYaw(0.0f);
+    camera.setPitch(0.0f);
+
+    float width = 800.0f;
+    float height = 600.0f;
+
+    // Center screen ray
+    QPointF centerPoint(400.0f, 300.0f);
+    Ray centerRay = camera.screenPointToRay(centerPoint, width, height);
+
+    // Ray origin must equal camera eye position
+    glm::vec3 eye = camera.eyePosition();
+    QVERIFY(glm::distance(centerRay.origin, eye) < 0.001f);
+
+    // Ray direction must be normalized
+    QVERIFY(std::abs(glm::length(centerRay.direction) - 1.0f) < 0.001f);
+
+    // For center ray, direction should point towards target: normalize(target - eye)
+    glm::vec3 expectedDir = glm::normalize(camera.target() - eye);
+    QVERIFY(glm::distance(centerRay.direction, expectedDir) < 0.005f);
+
+    // Top-left vs bottom-right rays should diverge
+    Ray tlRay = camera.screenPointToRay(QPointF(0.0f, 0.0f), width, height);
+    Ray brRay = camera.screenPointToRay(QPointF(800.0f, 600.0f), width, height);
+    QVERIFY(tlRay.direction.x < brRay.direction.x);
+    QVERIFY(tlRay.direction.y > brRay.direction.y);
+
+    // Boundary test: width = 0.0f, height = -10.0f
+    Ray badDimRay = camera.screenPointToRay(QPointF(100.0f, 100.0f), 0.0f, -10.0f);
+    QVERIFY(!std::isnan(badDimRay.direction.x));
+    QVERIFY(!std::isnan(badDimRay.direction.y));
+    QVERIFY(!std::isnan(badDimRay.direction.z));
+    QVERIFY(std::abs(glm::length(badDimRay.direction) - 1.0f) < 0.001f);
+}
+
+void tst_pmx_viewport::testGizmoHitTest() {
+    PmxGizmo gizmo;
+    gizmo.setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+    gizmo.setMode(GizmoMode::Translate);
+    float scale = 1.0f;
+
+    // Ray along +X axis towards origin offset: origin (0.5, 0, 5), dir (0, 0, -1) -> hits AxisX
+    GizmoAxis hitX = gizmo.hitTest(glm::vec3(0.5f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f), scale);
+    QCOMPARE(hitX, GizmoAxis::AxisX);
+
+    // Ray at (0, 0.5, 5), dir (0, 0, -1) -> hits AxisY
+    GizmoAxis hitY = gizmo.hitTest(glm::vec3(0.0f, 0.5f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f), scale);
+    QCOMPARE(hitY, GizmoAxis::AxisY);
+
+    // Ray at (5, 0, 0.5), dir (-1, 0, 0) -> hits AxisZ
+    GizmoAxis hitZ = gizmo.hitTest(glm::vec3(5.0f, 0.0f, 0.5f), glm::vec3(-1.0f, 0.0f, 0.0f), scale);
+    QCOMPARE(hitZ, GizmoAxis::AxisZ);
+
+    // Plane handle test: plane XY handle is near (0.25, 0.25, 0)
+    GizmoAxis hitXY = gizmo.hitTest(glm::vec3(0.25f, 0.25f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f), scale);
+    QCOMPARE(hitXY, GizmoAxis::PlaneXY);
+
+    // Missing ray
+    GizmoAxis hitMiss = gizmo.hitTest(glm::vec3(10.0f, 10.0f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f), scale);
+    QCOMPARE(hitMiss, GizmoAxis::None);
+
+    // Boundary tests: gizmoScale = 0.0f and GizmoMode::None
+    GizmoAxis hitZeroScale = gizmo.hitTest(glm::vec3(0.5f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f), 0.0f);
+    QCOMPARE(hitZeroScale, GizmoAxis::None);
+
+    gizmo.setMode(GizmoMode::None);
+    GizmoAxis hitModeNone = gizmo.hitTest(glm::vec3(0.5f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f), 1.0f);
+    QCOMPARE(hitModeNone, GizmoAxis::None);
+
+    // Rotation mode
+    gizmo.setMode(GizmoMode::Rotate);
+    // Z ring lies in XY plane at radius ~0.85
+    GizmoAxis hitRotZ = gizmo.hitTest(glm::vec3(0.85f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f), scale);
+    QCOMPARE(hitRotZ, GizmoAxis::AxisZ);
+
+    // Scale mode
+    gizmo.setMode(GizmoMode::Scale);
+    GizmoAxis hitScaleX = gizmo.hitTest(glm::vec3(0.5f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f), scale);
+    QCOMPARE(hitScaleX, GizmoAxis::AxisX);
+}
+
+void tst_pmx_viewport::testGizmoTranslationDeltaAndSnapping() {
+    PmxGizmo gizmo;
+    gizmo.setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+    gizmo.setTranslationSnap(0.5f);
+    float scale = 1.0f;
+
+    glm::vec3 ray0Origin(0.0f, 0.0f, 10.0f);
+    glm::vec3 ray0Dir(0.0f, 0.0f, -1.0f);
+
+    glm::vec3 ray1Origin(1.2f, 0.0f, 10.0f);
+    glm::vec3 ray1Dir(0.0f, 0.0f, -1.0f);
+
+    // Without snap
+    glm::vec3 deltaNoSnap = gizmo.computeTranslationDelta(
+        GizmoAxis::AxisX,
+        ray1Origin, ray1Dir,
+        ray0Origin, ray0Dir,
+        scale, false
+    );
+    QVERIFY(std::abs(deltaNoSnap.x - 1.2f) < 0.01f);
+    QCOMPARE(deltaNoSnap.y, 0.0f);
+    QCOMPARE(deltaNoSnap.z, 0.0f);
+
+    // With snap (0.5 snap increment, 1.2 rounds to 1.0)
+    glm::vec3 deltaSnap = gizmo.computeTranslationDelta(
+        GizmoAxis::AxisX,
+        ray1Origin, ray1Dir,
+        ray0Origin, ray0Dir,
+        scale, true
+    );
+    QVERIFY(std::abs(deltaSnap.x - 1.0f) < 0.001f);
+
+    // Plane translation
+    glm::vec3 rayPlane1Origin(0.6f, 1.4f, 10.0f);
+    glm::vec3 deltaPlaneSnap = gizmo.computeTranslationDelta(
+        GizmoAxis::PlaneXY,
+        rayPlane1Origin, ray1Dir,
+        ray0Origin, ray0Dir,
+        scale, true
+    );
+    // 0.6 snaps to 0.5, 1.4 snaps to 1.5
+    QVERIFY(std::abs(deltaPlaneSnap.x - 0.5f) < 0.01f);
+    QVERIFY(std::abs(deltaPlaneSnap.y - 1.5f) < 0.01f);
+    QCOMPARE(deltaPlaneSnap.z, 0.0f);
+
+    // Boundary snapping tests: snap = 0.0f, snap = -1.0f, snap = Inf
+    gizmo.setTranslationSnap(0.0f);
+    glm::vec3 dZeroSnap = gizmo.computeTranslationDelta(GizmoAxis::AxisX, ray1Origin, ray1Dir, ray0Origin, ray0Dir, scale, true);
+    QVERIFY(std::isfinite(dZeroSnap.x));
+    QVERIFY(std::isfinite(dZeroSnap.y));
+    QVERIFY(std::isfinite(dZeroSnap.z));
+
+    gizmo.setTranslationSnap(-1.0f);
+    glm::vec3 dNegSnap = gizmo.computeTranslationDelta(GizmoAxis::AxisX, ray1Origin, ray1Dir, ray0Origin, ray0Dir, scale, true);
+    QVERIFY(std::isfinite(dNegSnap.x));
+    QVERIFY(std::isfinite(dNegSnap.y));
+    QVERIFY(std::isfinite(dNegSnap.z));
+
+    gizmo.setTranslationSnap(std::numeric_limits<float>::infinity());
+    glm::vec3 dInfSnap = gizmo.computeTranslationDelta(GizmoAxis::AxisX, ray1Origin, ray1Dir, ray0Origin, ray0Dir, scale, true);
+    QVERIFY(std::isfinite(dInfSnap.x));
+    QVERIFY(std::isfinite(dInfSnap.y));
+    QVERIFY(std::isfinite(dInfSnap.z));
+}
+
+void tst_pmx_viewport::testGizmoRotationAndScaleDelta() {
+    PmxGizmo gizmo;
+    gizmo.setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+    gizmo.setRotationSnap(glm::radians(15.0f)); // 15 degrees snap
+    gizmo.setScaleSnap(0.1f);
+    float scale = 1.0f;
+
+    // Rotation around Z axis: ray in XY plane
+    glm::vec3 r0Orig(1.0f, 0.0f, 10.0f);
+    glm::vec3 r0Dir(0.0f, 0.0f, -1.0f);
+
+    // Rotate ~45 degrees: (cos45, sin45) = (0.7071, 0.7071)
+    glm::vec3 r1Orig(0.7071f, 0.7071f, 10.0f);
+    glm::vec3 r1Dir(0.0f, 0.0f, -1.0f);
+
+    glm::quat qRotNoSnap = gizmo.computeRotationDelta(
+        GizmoAxis::AxisZ,
+        r1Orig, r1Dir,
+        r0Orig, r0Dir,
+        scale, false
+    );
+    float angle = glm::angle(qRotNoSnap);
+    QVERIFY(std::abs(glm::degrees(angle) - 45.0f) < 1.0f);
+
+    // With 15 deg snap: 45 degrees is an exact multiple (3 * 15)
+    glm::quat qRotSnap = gizmo.computeRotationDelta(
+        GizmoAxis::AxisZ,
+        r1Orig, r1Dir,
+        r0Orig, r0Dir,
+        scale, true
+    );
+    float angleSnap = glm::angle(qRotSnap);
+    QVERIFY(std::abs(glm::degrees(angleSnap) - 45.0f) < 0.1f);
+
+    // Scale delta along AxisX
+    glm::vec3 s0Orig(0.0f, 0.0f, 10.0f);
+    glm::vec3 s0Dir(0.0f, 0.0f, -1.0f);
+    glm::vec3 s1Orig(0.24f, 0.0f, 10.0f); // +0.24 delta -> factor = 1.24
+    glm::vec3 s1Dir(0.0f, 0.0f, -1.0f);
+
+    glm::vec3 scaleNoSnap = gizmo.computeScaleDelta(
+        GizmoAxis::AxisX,
+        s1Orig, s1Dir,
+        s0Orig, s0Dir,
+        scale, false
+    );
+    QVERIFY(std::abs(scaleNoSnap.x - 1.24f) < 0.02f);
+    QCOMPARE(scaleNoSnap.y, 1.0f);
+    QCOMPARE(scaleNoSnap.z, 1.0f);
+
+    // With snap (0.1 snap): 1.24 -> 1.2
+    glm::vec3 scaleSnap = gizmo.computeScaleDelta(
+        GizmoAxis::AxisX,
+        s1Orig, s1Dir,
+        s0Orig, s0Dir,
+        scale, true
+    );
+    QVERIFY(std::abs(scaleSnap.x - 1.2f) < 0.01f);
+}
+
+void tst_pmx_viewport::testSymmetricVertexAndMirroring() {
+    PmxDocument doc;
+    PmxVertex v0;
+    v0.position = glm::vec3(2.0f, 5.0f, 3.0f);
+    doc.vertices.push_back(v0);
+
+    PmxVertex v1;
+    v1.position = glm::vec3(-2.0f, 5.0f, 3.0f);
+    doc.vertices.push_back(v1);
+
+    PmxVertex v2; // centerline vertex
+    v2.position = glm::vec3(0.001f, 10.0f, 1.0f);
+    doc.vertices.push_back(v2);
+
+    PmxVertex v3; // asymmetric vertex
+    v3.position = glm::vec3(7.0f, 1.0f, 2.0f);
+    doc.vertices.push_back(v3);
+
+    // v0 symmetric partner should be v1
+    QCOMPARE(PmxGizmo::findSymmetricVertex(doc, 0), 1);
+    // v1 symmetric partner should be v0
+    QCOMPARE(PmxGizmo::findSymmetricVertex(doc, 1), 0);
+    // Centerline vertex v2 should pair with itself
+    QCOMPARE(PmxGizmo::findSymmetricVertex(doc, 2), 2);
+    // Asymmetric vertex v3 should return -1
+    QCOMPARE(PmxGizmo::findSymmetricVertex(doc, 3), -1);
+    // Boundary tests: negative index (-1) and out-of-bounds index (999)
+    QCOMPARE(PmxGizmo::findSymmetricVertex(doc, -1), -1);
+    QCOMPARE(PmxGizmo::findSymmetricVertex(doc, 999), -1);
+
+    // Mirror delta
+    glm::vec3 delta(1.5f, -2.0f, 3.0f);
+    glm::vec3 mirrored = PmxGizmo::mirrorDelta(delta);
+    QCOMPARE(mirrored.x, -1.5f);
+    QCOMPARE(mirrored.y, -2.0f);
+    QCOMPARE(mirrored.z, 3.0f);
+}
+
+void tst_pmx_viewport::testSymmetricBoneMatching() {
+    PmxDocument doc;
+    // Japanese pairs
+    PmxBone b0; b0.nameJp = QString::fromUtf8("左腕"); doc.bones.push_back(b0);
+    PmxBone b1; b1.nameJp = QString::fromUtf8("右腕"); doc.bones.push_back(b1);
+
+    // English pairs
+    PmxBone b2; b2.nameEn = QStringLiteral("Arm_L"); doc.bones.push_back(b2);
+    PmxBone b3; b3.nameEn = QStringLiteral("Arm_R"); doc.bones.push_back(b3);
+
+    PmxBone b4; b4.nameEn = QStringLiteral("LeftLeg"); doc.bones.push_back(b4);
+    PmxBone b5; b5.nameEn = QStringLiteral("RightLeg"); doc.bones.push_back(b5);
+
+    // Center bone
+    PmxBone b6; b6.nameJp = QString::fromUtf8("センター"); doc.bones.push_back(b6);
+
+    QCOMPARE(PmxGizmo::findSymmetricBone(doc, 0), 1);
+    QCOMPARE(PmxGizmo::findSymmetricBone(doc, 1), 0);
+    QCOMPARE(PmxGizmo::findSymmetricBone(doc, 2), 3);
+    QCOMPARE(PmxGizmo::findSymmetricBone(doc, 3), 2);
+    QCOMPARE(PmxGizmo::findSymmetricBone(doc, 4), 5);
+    QCOMPARE(PmxGizmo::findSymmetricBone(doc, 5), 4);
+    QCOMPARE(PmxGizmo::findSymmetricBone(doc, 6), -1);
+    // Boundary tests: negative index (-1) and out-of-bounds index (999)
+    QCOMPARE(PmxGizmo::findSymmetricBone(doc, -1), -1);
+    QCOMPARE(PmxGizmo::findSymmetricBone(doc, 999), -1);
+
+    // Mirror rotation across X=0 plane
+    glm::quat q = glm::angleAxis(glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::quat qMirrored = PmxGizmo::mirrorRotation(q);
+    QVERIFY(std::abs(qMirrored.w - q.w) < 0.001f);
+    QVERIFY(std::abs(qMirrored.y + q.y) < 0.001f);
+}
+
+void tst_pmx_viewport::testVertexTransformCommandUndoRedo() {
+    PmxDocument doc;
+    PmxVertex v0;
+    v0.position = glm::vec3(1.0f, 2.0f, 3.0f);
+    v0.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+    doc.vertices.push_back(v0);
+
+    PmxDocumentController controller;
+    controller.setDocumentInternal(doc);
+
+    std::vector<VertexTransformDelta> deltas;
+    VertexTransformDelta d;
+    d.vertexIndex = 0;
+    d.oldPos = v0.position;
+    d.newPos = glm::vec3(5.0f, 6.0f, 7.0f);
+    d.oldNormal = v0.normal;
+    d.newNormal = glm::vec3(1.0f, 0.0f, 0.0f);
+    deltas.push_back(d);
+
+    auto* cmd = new PmxVertexTransformCommand(&controller, deltas, 1001);
+    controller.pushCommand(cmd);
+
+    // Verify redo applied
+    QCOMPARE(controller.document().vertices[0].position, glm::vec3(5.0f, 6.0f, 7.0f));
+    QCOMPARE(controller.document().vertices[0].normal, glm::vec3(1.0f, 0.0f, 0.0f));
+    QCOMPARE(controller.undoStack()->count(), 1);
+
+    // Verify mergeWith within same drag session (same commandId)
+    std::vector<VertexTransformDelta> deltas2;
+    VertexTransformDelta d2;
+    d2.vertexIndex = 0;
+    d2.oldPos = v0.position;
+    d2.newPos = glm::vec3(8.0f, 9.0f, 10.0f);
+    d2.oldNormal = v0.normal;
+    d2.newNormal = glm::vec3(0.0f, 0.0f, 1.0f);
+    deltas2.push_back(d2);
+
+    auto* cmd2 = new PmxVertexTransformCommand(&controller, deltas2, 1001);
+    controller.pushCommand(cmd2);
+
+    QCOMPARE(controller.document().vertices[0].position, glm::vec3(8.0f, 9.0f, 10.0f));
+    // Count must still be 1 because it merged!
+    QCOMPARE(controller.undoStack()->count(), 1);
+
+    // Undo should revert to initial v0.position
+    controller.undo();
+    QCOMPARE(controller.document().vertices[0].position, glm::vec3(1.0f, 2.0f, 3.0f));
+    QCOMPARE(controller.document().vertices[0].normal, glm::vec3(0.0f, 1.0f, 0.0f));
+
+    // Redo should restore to merged 8.0f, 9.0f, 10.0f
+    controller.redo();
+    QCOMPARE(controller.document().vertices[0].position, glm::vec3(8.0f, 9.0f, 10.0f));
+
+    // Boundary tests: null controller, out-of-bounds index, and mergeWith rejection
+    PmxVertexTransformCommand nullCmd(nullptr, deltas, 1001);
+    nullCmd.redo();
+    nullCmd.undo();
+
+    std::vector<VertexTransformDelta> oobDeltas;
+    VertexTransformDelta oobD;
+    oobD.vertexIndex = 999;
+    oobD.oldPos = glm::vec3(0.0f);
+    oobD.newPos = glm::vec3(1.0f);
+    oobDeltas.push_back(oobD);
+    PmxVertexTransformCommand* oobCmd = new PmxVertexTransformCommand(&controller, oobDeltas, 1001);
+    controller.pushCommand(oobCmd);
+
+    PmxVertexTransformCommand baseCmd(&controller, deltas, 1001);
+    QVERIFY(!baseCmd.mergeWith(nullptr));
+
+    PmxVertexTransformCommand diffIdCmd(&controller, deltas, 9999);
+    QVERIFY(!baseCmd.mergeWith(&diffIdCmd));
+
+    std::vector<VertexTransformDelta> diffCountDeltas = deltas;
+    diffCountDeltas.push_back(d);
+    PmxVertexTransformCommand diffCountCmd(&controller, diffCountDeltas, 1001);
+    QVERIFY(!baseCmd.mergeWith(&diffCountCmd));
+
+    std::vector<VertexTransformDelta> diffIdxDeltas = deltas;
+    diffIdxDeltas[0].vertexIndex = 123;
+    PmxVertexTransformCommand diffIdxCmd(&controller, diffIdxDeltas, 1001);
+    QVERIFY(!baseCmd.mergeWith(&diffIdxCmd));
+}
+
+void tst_pmx_viewport::testBoneTransformCommandUndoRedo() {
+    PmxDocument doc;
+    PmxBone b0;
+    b0.nameJp = QStringLiteral("Bone0");
+    b0.nameEn = QStringLiteral("Bone0");
+    b0.position = glm::vec3(10.0f, 20.0f, 30.0f);
+    doc.bones.push_back(b0);
+
+    PmxDocumentController controller;
+    controller.setDocumentInternal(doc);
+
+    std::vector<BoneTransformDelta> deltas;
+    BoneTransformDelta d;
+    d.boneIndex = 0;
+    d.oldPos = b0.position;
+    d.newPos = glm::vec3(15.0f, 25.0f, 35.0f);
+    deltas.push_back(d);
+
+    auto* cmd = new PmxBoneTransformCommand(&controller, deltas, 1002);
+    controller.pushCommand(cmd);
+
+    QCOMPARE(controller.document().bones[0].position, glm::vec3(15.0f, 25.0f, 35.0f));
+    QCOMPARE(controller.undoStack()->count(), 1);
+
+    // Test mergeWith
+    std::vector<BoneTransformDelta> deltas2;
+    BoneTransformDelta d2;
+    d2.boneIndex = 0;
+    d2.oldPos = b0.position;
+    d2.newPos = glm::vec3(50.0f, 60.0f, 70.0f);
+    deltas2.push_back(d2);
+
+    auto* cmd2 = new PmxBoneTransformCommand(&controller, deltas2, 1002);
+    controller.pushCommand(cmd2);
+
+    QCOMPARE(controller.document().bones[0].position, glm::vec3(50.0f, 60.0f, 70.0f));
+    QCOMPARE(controller.undoStack()->count(), 1);
+
+    controller.undo();
+    QCOMPARE(controller.document().bones[0].position, glm::vec3(10.0f, 20.0f, 30.0f));
+
+    controller.redo();
+    QCOMPARE(controller.document().bones[0].position, glm::vec3(50.0f, 60.0f, 70.0f));
+
+    // Boundary tests: null controller, out-of-bounds index, and mergeWith rejection
+    PmxBoneTransformCommand nullBoneCmd(nullptr, deltas, 1002);
+    nullBoneCmd.redo();
+    nullBoneCmd.undo();
+
+    std::vector<BoneTransformDelta> oobBoneDeltas;
+    BoneTransformDelta oobBoneD;
+    oobBoneD.boneIndex = 999;
+    oobBoneD.oldPos = glm::vec3(0.0f);
+    oobBoneD.newPos = glm::vec3(1.0f);
+    oobBoneDeltas.push_back(oobBoneD);
+    PmxBoneTransformCommand* oobBoneCmd = new PmxBoneTransformCommand(&controller, oobBoneDeltas, 1002);
+    controller.pushCommand(oobBoneCmd);
+
+    PmxBoneTransformCommand baseBoneCmd(&controller, deltas, 1002);
+    QVERIFY(!baseBoneCmd.mergeWith(nullptr));
+
+    PmxBoneTransformCommand diffIdBoneCmd(&controller, deltas, 9999);
+    QVERIFY(!baseBoneCmd.mergeWith(&diffIdBoneCmd));
+
+    std::vector<BoneTransformDelta> diffCountBoneDeltas = deltas;
+    diffCountBoneDeltas.push_back(d);
+    PmxBoneTransformCommand diffCountBoneCmd(&controller, diffCountBoneDeltas, 1002);
+    QVERIFY(!baseBoneCmd.mergeWith(&diffCountBoneCmd));
+
+    std::vector<BoneTransformDelta> diffIdxBoneDeltas = deltas;
+    diffIdxBoneDeltas[0].boneIndex = 123;
+    PmxBoneTransformCommand diffIdxBoneCmd(&controller, diffIdxBoneDeltas, 1002);
+    QVERIFY(!baseBoneCmd.mergeWith(&diffIdxBoneCmd));
+}
+
+void tst_pmx_viewport::testViewportGizmoIntegration() {
+    PmxDocument doc;
+    PmxBone b0;
+    b0.position = glm::vec3(10.0f, 20.0f, 30.0f); // PMX LH
+    doc.bones.push_back(b0);
+
+    PmxDocumentController controller;
+    controller.setDocumentInternal(doc);
+
+    PmxViewportItem viewport;
+    viewport.setController(&controller);
+
+    viewport.setGizmoMode(GizmoMode::Translate);
+    QCOMPARE(viewport.gizmoMode(), GizmoMode::Translate);
+    QCOMPARE(viewport.gizmoModeInt(), 1);
+
+    viewport.setCoordSpace(CoordSpace::Local);
+    QCOMPARE(viewport.coordSpace(), CoordSpace::Local);
+    QCOMPARE(viewport.coordSpaceInt(), 1);
+
+    viewport.setSymmetricEditing(true);
+    QVERIFY(viewport.symmetricEditing());
+
+    viewport.setSnapEnabled(true);
+    QVERIFY(viewport.snapEnabled());
+
+    // Select bone 0 -> gizmo should update position to RH position: (10, 20, -30)
+    controller.selectionManager()->setSelectedBones({ 0 });
+    viewport.updateGizmoPosition();
+
+    glm::vec3 expectedRH = PmxCamera::toRightHanded(b0.position);
+    QCOMPARE(viewport.gizmo()->position(), expectedRH);
+    QCOMPARE(viewport.gizmo()->position().z, -30.0f);
+
+    // Empty selection handling: clear all selections and update gizmo position without crash
+    controller.selectionManager()->clearAll();
+    viewport.updateGizmoPosition();
+    QVERIFY(true);
 }
 
 QTEST_MAIN(tst_pmx_viewport)

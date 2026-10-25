@@ -124,6 +124,39 @@ glm::mat4 PmxCamera::projectionMatrix(float aspect) const {
     return glm::perspective(glm::radians(m_fov), safeAspect, safeNear, safeFar);
 }
 
+Ray PmxCamera::screenPointToRay(const QPointF& point, float width, float height) const {
+    Ray ray;
+    screenPointToRay(point, width, height, ray.origin, ray.direction);
+    return ray;
+}
+
+void PmxCamera::screenPointToRay(const QPointF& point, float width, float height, glm::vec3& outOrigin, glm::vec3& outDir) const {
+    outOrigin = eyePosition();
+    float safeWidth = (std::isfinite(width) && width > 0.0001f) ? width : 1.0f;
+    float safeHeight = (std::isfinite(height) && height > 0.0001f) ? height : 1.0f;
+    float aspect = safeWidth / safeHeight;
+
+    float ptX = std::isfinite(static_cast<float>(point.x())) ? static_cast<float>(point.x()) : 0.0f;
+    float ptY = std::isfinite(static_cast<float>(point.y())) ? static_cast<float>(point.y()) : 0.0f;
+
+    float ndcX = (2.0f * ptX / safeWidth) - 1.0f;
+    float ndcY = 1.0f - (2.0f * ptY / safeHeight);
+
+    glm::mat4 invVP = glm::inverse(projectionMatrix(aspect) * viewMatrix());
+    glm::vec4 farClip(ndcX, ndcY, 1.0f, 1.0f);
+    glm::vec4 farWorld = invVP * farClip;
+    if (std::abs(farWorld.w) > 1e-6f) {
+        farWorld /= farWorld.w;
+    }
+
+    glm::vec3 dir = glm::vec3(farWorld) - outOrigin;
+    if (std::isfinite(dir.x) && std::isfinite(dir.y) && std::isfinite(dir.z) && glm::length(dir) > 1e-6f) {
+        outDir = glm::normalize(dir);
+    } else {
+        outDir = glm::vec3(0.0f, 0.0f, -1.0f);
+    }
+}
+
 glm::vec3 PmxCamera::toRightHanded(const glm::vec3& pLH) {
     return glm::vec3(pLH.x, pLH.y, -pLH.z);
 }

@@ -21,6 +21,8 @@ class PmxRigidBodyTableModel;
 class PmxJointTableModel;
 class PmxDocumentSnapshotCommand;
 class PmxBatchOperationCommand;
+class PmxVertexTransformCommand;
+class PmxBoneTransformCommand;
 template <typename T> class PmxPropertyEditCommand;
 
 class PmxDocumentController : public QObject {
@@ -87,6 +89,8 @@ signals:
 private:
     friend class PmxDocumentSnapshotCommand;
     friend class PmxBatchOperationCommand;
+    friend class PmxVertexTransformCommand;
+    friend class PmxBoneTransformCommand;
     friend class PmxMaterialTableModel;
     friend class PmxBoneTableModel;
     friend class PmxInfoModel;

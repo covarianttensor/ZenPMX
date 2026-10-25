@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QPointF>
 #include <cmath>
 #include <algorithm>
 #include <glm/glm.hpp>
@@ -8,6 +9,11 @@
 #include <glm/gtc/quaternion.hpp>
 
 namespace pmx {
+
+struct Ray {
+    glm::vec3 origin{0.0f};
+    glm::vec3 direction{0.0f, 0.0f, -1.0f};
+};
 
 class PmxCamera : public QObject {
     Q_OBJECT
@@ -50,6 +56,10 @@ public:
     glm::vec3 eyePosition() const;
     glm::mat4 viewMatrix() const;
     glm::mat4 projectionMatrix(float aspect) const;
+
+    // Ray casting from screen space to 3D right-handed world space
+    Ray screenPointToRay(const QPointF& point, float width, float height) const;
+    void screenPointToRay(const QPointF& point, float width, float height, glm::vec3& outOrigin, glm::vec3& outDir) const;
 
     // Handedness conversion utilities (Section 5.1)
     static glm::vec3 toRightHanded(const glm::vec3& pLH);
