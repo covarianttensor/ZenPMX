@@ -8,11 +8,11 @@
 ## 1. Project Status Overview
 * **Project Name:** ZenPMX (Native Linux PMX Editor)
 * **GitHub Repository:** [`https://github.com/covarianttensor/ZenPMX`](https://github.com/covarianttensor/ZenPMX) (Public)
-* **Active Phase:** Milestone 3 Stabilization & Regression Remediation
-* **Active Target:** Ticket 3.6 (Bugfix: Shaded Mesh Geometry Distortion & Edge Pass Remediation)
-* **Overall Completion Level:** 75%
-* **Current Working Tree:** Clean (feature commit `f9a5312`)
-* **Test Suite Status:** 7/7 CTest suites passing (126 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.32s)
+* **Active Phase:** Milestone 4: Live TransformView (`PmxEvaluator` + CCDIK + SDEF + Bullet3 + VMD)
+* **Active Target:** Ticket 4.6 (TransformView Viewport Integration & Interactive Timeline Controls)
+* **Overall Completion Level:** 94%
+* **Current Working Tree:** Clean (feature commit `8fa77f5`)
+* **Test Suite Status:** 8/8 CTest suites passing (173 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.70s)
 
 ---
 
@@ -48,7 +48,17 @@
 | 2026-10-25 02:35 | **Ticket-3.3** | Viewport / Models (`PmxViewport` / `PmxModels`) | `pmx_ui_engineer` | `e72f5d7` | 7/7 CTest (31/31 QtTest) | ~45k | Interactive 3D gizmos (Translate/Rotate/Scale), ray picking, snapping, symmetry, sparse undo commands. (Strike 1 resolved). |
 | 2026-10-25 04:18 | **Ticket-3.4** | Viewport / Physics (`PmxViewport`) | `pmx_ui_engineer` | `1b6afef` | 7/7 CTest (36/36 QtTest) | ~44k | Wireframe visualizers for bones (octahedron), rigid bodies (sphere/box/capsule), 6DoF joints (cross/limit arcs/anchors). Strike 1 resolved handedness & selection redraw. |
 | 2026-10-25 04:56 | **Ticket-3.5** | Viewport / Models (`PmxViewport` / `PmxModels`) | `pmx_ui_engineer` | `f9a5312` | 7/7 CTest (43/43 QtTest) | ~48k | Interactive weight painting engine, heatmap shaders, radius/falloff brush, multi-bone normalization, sparse undo. Strike 1 resolved test call & encapsulation. |
-| 2026-10-25 05:20 | **Ticket-3.6** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | In Progress | Pending | ~0k | Regression bugfix: Shaded mesh geometry distortion & inverted-hull edge pass remediation on multi-material models (Barbara.pmx). |
+| 2026-10-25 07:07 | **Ticket-3.6** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | `3f175fb` | 7/7 CTest (47/47 QtTest) | ~55k | Regression bugfix: Shaded mesh distortion resolved by fixing pipeline binding order, zero normal guard in mesh.vert, de-hollowed tests. (Strike 1 resolved). |
+
+### Milestone 4: Live TransformView (In Progress)
+
+| Date / UTC | Ticket ID | Subsystem Target | Subagent | Commit | Test Status | Token Burn | Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
+| 2026-10-25 14:01 | **Ticket-4.1** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `d149e08` | 8/8 CTest (13/13 QtTest) | ~35k | Runtime scene node graph, deform tier topological sorting, append inheritance, morph accumulators. PASSED on Strike 0. |
+| 2026-10-25 14:36 | **Ticket-4.2** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `a242a1b` | 8/8 CTest (19/19 QtTest) | ~38k | MMD CCDIK solver, ZXY Euler decomposition/clamping, knee limits, iteration bounding. PASSED on Strike 0. |
+| 2026-10-25 15:22 | **Ticket-4.3** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `5a6101a` | 8/8 CTest (27/27 QtTest) | ~42k | High-Fidelity SDEF spherical volume skinning, BDEF1/2/4/QDEF, morph integration, safe normal guards. (Strike 1 resolved SDEF auxiliary bounds spec violation). |
+| 2026-10-25 16:14 | **Ticket-4.4** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `121ea4d` | 8/8 CTest (36/36 QtTest) | ~46k | Bullet3 discrete dynamics, 6DoF spring constraints, kinematic tracking, collision filtering. (Strike 1 resolved PhysicsAndBone translation preservation & ZXY Euler orientation). |
+| 2026-10-25 17:06 | **Ticket-4.5** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `8fa77f5` | 8/8 CTest (47/47 QtTest) | ~45k | VMD motion & VPD pose file importer, cubic Bézier spline & quaternion slerp playback engine. (Strike 1 resolved NaN over-read & untrusted buffer bounds checks). |
 
 ---
 
@@ -203,12 +213,46 @@
   1. Pipeline binding order defect in `PmxViewportItem.cpp`: `cb->setVertexInput` was invoked *before* `cb->setGraphicsPipeline(pipe)` in the shaded pass, and was omitted entirely in the edge pass. On OpenGL Core (`QRhiGles2`), switching pipelines binds a new VAO without the vertex buffer/attribute bindings, corrupting vertex fetches and stretching the right half of the mesh across the viewport.
   2. Degenerate normal division by zero in `src/viewport/shaders/mesh.vert` line 39: `normalize(mat3(u_normalMatrix) * inNormal)` causes `NaN` propagation on zero-length normals.
   3. Textbook hollow test in `tests/tst_pmx_viewport.cpp`: `testBarbaraModelLoadingAndDiagnostics` asserted CPU staging floats without performing offscreen GPU render verification.
+### Incident 13: Ticket 4.3 SDEF Directional Bounds Spec Violation & Strike 1 Remediation
+* **Date:** 2026-10-25 15:06 UTC
+* **Subsystem:** `PmxEvaluator` (`src/evaluator/PmxVertexDeformer.cpp`, `tests/tst_pmx_evaluator.cpp`)
+* **Root Cause:**
+  1. Mathematical defect in `PmxVertexDeformer::deformSdef`: Directional bounds calculation used `deltaR = (rTotal - rRest) * 0.5f` with unrotated `rRest`, violating rigid body rotation invariance and causing spurious mesh tearing under limb rotations.
+  2. Hollow test omission in `tests/tst_pmx_evaluator.cpp`: SDEF tests previously evaluated only zero directional bounds ($R_0, R_1 = 0$) or rest pose ($\mathbf{M} = \mathbf{I}$), allowing the defect to pass CI.
 * **Corrective Action:**
-  - In strict accordance with Golden Law 5 (The 2-Strike Rule), `pmx_ui_engineer` is NOT killed.
-  - Lead Architect dispatches exact QA logs and architectural remediation instructions to the same worker instance (`b62d4e55-50dd-4ef9-8346-3cbe7f704986`) via `send_message`.
+  - In strict accordance with Golden Law 5 (The 2-Strike Rule), worker subagent `154ce97d-6dd0-4c92-9360-9520dd3359ea` was NOT killed.
+  - Lead Architect dispatched exact QA audit logs and remediation directives to the active worker via `send_message`.
+  - Worker corrected the formula to canonical spec:
+    $$\mathbf{r}_0 = \text{mat3}(\mathbf{M}_{b0}) \mathbf{R}_0 - \mathbf{R}_{\text{sdef}} \mathbf{R}_0, \quad \mathbf{r}_1 = \text{mat3}(\mathbf{M}_{b1}) \mathbf{R}_1 - \mathbf{R}_{\text{sdef}} \mathbf{R}_1, \quad \Delta \mathbf{r} = w_0 \mathbf{r}_0 + w_1 \mathbf{r}_1$$
+    and added two non-hollow tests (`testSdefRigidRotationInvariance` and `testSdefDifferentialRotationWithBounds`).
+  - Adversarial QA Re-Audit PASSED; committed at `5a6101a`.
 
+### Incident 14: Ticket 4.4 PhysicsAndBone Translation & ZXY Euler Orientation (Strike 1)
+* **Date:** 2026-10-25 16:01 UTC
+* **Subsystem:** `PmxEvaluator` (`src/evaluator/PmxPhysicsEngine.cpp`, `tests/tst_pmx_evaluator.cpp`)
+* **Root Cause:**
+  1. Spec violation: `syncDynamicBones` overwrote translation for `physicsMode == 2` instead of preserving parent hierarchy translation while applying only physics rotation.
+  2. Coordinate handedness / Euler order mismatch in `createBtTransform`: `setEulerZYX` used intrinsic ZYX / extrinsic XYZ instead of canonical extrinsic $ZXY$ ($R = R_y R_x R_z$).
+  3. Move assignment operator lacked safe `clear()` teardown before moving member unique pointers.
+  4. Collision shape size dimensions lacked clamping against non-positive floats.
+* **Corrective Action:**
+  - In strict accordance with Golden Law 5 (The 2-Strike Rule), worker subagent `352b7f9d-b69b-477a-a0f4-33c613871087` was NOT killed.
+  - Lead Architect dispatched exact QA audit logs and remediation directives to the active worker via `send_message`.
+  - Worker resolved all items: preserved translation on `boneWorld[3]` for mode 2, constructed canonical $ZXY$ quaternion `qy * qx * qz`, implemented custom move assignment calling `clear()`, clamped dimensions with `std::max(dim, 1e-4f)`, and added non-hollow tests `testBulletPhysicsAndBoneMode` and `testBulletCompoundEulerRotation`.
+  - Adversarial QA Re-Audit PASSED; committed at `121ea4d`.
 
-
+### Incident 15: Ticket 4.5 NaN Heap Iterator Read & Untrusted Buffer Allocation (Strike 1)
+* **Date:** 2026-10-25 16:55 UTC
+* **Subsystem:** `PmxEvaluator` (`src/evaluator/PmxAnimationPlayer.cpp`, `src/evaluator/VmdImporter.cpp`, `tests/tst_pmx_evaluator.cpp`)
+* **Root Cause:**
+  1. `std::upper_bound` on track keyframes with `frame = NaN` returned `track.end()`, dereferencing an out-of-bounds heap element under ASan.
+  2. Untrusted counts (`boneCount`, `morphCount`, `ikCount`) in VMD 2.0 importer called `.reserve(count)` without verifying available buffer size, exposing memory exhaustion DOS on corrupted files.
+  3. Desynchronization on truncated camera/light/shadow sub-records.
+* **Corrective Action:**
+  - In strict accordance with Golden Law 5 (The 2-Strike Rule), worker subagent was NOT killed.
+  - Lead Architect dispatched exact QA audit logs and remediation directives to the active worker via `send_message`.
+  - Worker resolved all items: added `std::isnan(frame)` guards in `setFrame()`, `evaluateBezier()`, and track search routines (`it == track.end()` and `it == track.begin()` fallback); added division-based bounds checking before all `.reserve()` calls in `VmdImporter.cpp`; added `testAnimationPlayerNanHandling` and `testVmdMalformedBufferRejection`.
+  - Adversarial QA Re-Audit PASSED; committed at `8fa77f5`.
 
 ---
 

@@ -9,11 +9,11 @@
 
 ```text
 ================================================================================
-[██████████████████████████████░░░░░░░░░░] 75% COMPLETE
+[█████████████████████████████████████░░░] 94% COMPLETE
 ================================================================================
 Project: ZenPMX (Native Linux PMX Editor)
 Repository: https://github.com/covarianttensor/ZenPMX (Public)
-Status: Milestone 1, 2 & 3 VERIFIED (v0.1.0-milestone1, v0.2.0-milestone2, v0.3.0-milestone3)
+Status: Milestone 1, 2 & 3 STABILIZED (v0.1.0-milestone1, v0.2.0-milestone2, v0.3.0-milestone3)
 Active Phase: Milestone 4 (Live TransformView: CCDIK, SDEF & Bullet3 Physics)
 ```
 
@@ -26,7 +26,7 @@ Active Phase: Milestone 4 (Live TransformView: CCDIK, SDEF & Bullet3 Physics)
 | **Milestone 1** | **The Tracer Bullet (End-to-End Pipeline)** | 5 | `[DONE]` | **PASS** | `v0.1.0-milestone1` |
 | **Milestone 2** | **Complete 8-Tab Spreadsheet Inspector & Kitbash Merger** | 5 | `[DONE]` | **PASS** | `v0.2.0-milestone2` |
 | **Milestone 3** | **Full MMD Shader Pipeline & Interactive 3D Edit Mode** | 5 | `[DONE]` | **PASS** | `v0.3.0-milestone3` |
-| **Milestone 4** | **Live TransformView (CCDIK, SDEF & Bullet3 Physics)** | 5 | `[TODO]` | Pending | `v0.4.0-milestone4` |
+| **Milestone 4** | **Live TransformView (CCDIK, SDEF & Bullet3 Physics)** | 6 | `[ACTIVE]` | In Progress | `v0.4.0-milestone4` |
 | **Milestone 5** | **The Top 8 Native C++ Community Power Tools** | 5 | `[TODO]` | Pending | `v0.5.0-milestone5` |
 | **Milestone 6** | **External Mono PEPlugin Host & Full MCP Co-Pilot** | 4 | `[TODO]` | Pending | `v1.0.0` |
 
@@ -98,7 +98,7 @@ Transform the viewport from a flat diffuse renderer into a production-grade MMD 
 | **Ticket 3.3** | **Interactive 3D Transform Gizmos (Translate/Rotate/Scale) & Symmetric Editing** | `PmxViewport` / `PmxModels` | `pmx_ui_engineer` | `[DONE]` | Ticket 3.2 | `e72f5d7` |
 | **Ticket 3.4** | **Wireframe Visualizers for Bones, Rigid Bodies (Sphere/Box/Capsule) & 6DoF Joints** | `PmxViewport` | `pmx_ui_engineer` | `[DONE]` | Ticket 3.3 | `1b6afef` |
 | **Ticket 3.5** | **Interactive Weight Painting Engine with Heatmap Visualization & Radius/Falloff Brush** | `PmxViewport` / `PmxModels` | `pmx_ui_engineer` | `[DONE]` | Ticket 3.4 | `f9a5312` |
-| **Ticket 3.6** | **Regression Bugfix: Shaded Mesh Geometry Distortion & Edge Pass Remediation** | `PmxViewport` | `pmx_ui_engineer` | `[ACTIVE]` | Ticket 3.5 | In Progress |
+| **Ticket 3.6** | **Regression Bugfix: Shaded Mesh Geometry Distortion & Edge Pass Remediation** | `PmxViewport` | `pmx_ui_engineer` | `[DONE]` | Ticket 3.5 | `3f175fb` |
 
 ### Detailed Ticket Breakdown for Milestone 3:
 
@@ -134,16 +134,42 @@ Transform the viewport from a flat diffuse renderer into a production-grade MMD 
 
 ---
 
-## 6. Milestone 4 through 6 Roadmap Preview
+## 6. Milestone 4 Ticket Registry: Live TransformView (CCDIK, SDEF & Bullet3 Physics)
 
-* **Milestone 4: Live TransformView (CCDIK, SDEF & Bullet3 Physics) (`v0.4.0-milestone4`)**
-  - `PmxEvaluator` runtime scene with 60 Hz scheduler.
-  - Deform Tier (`変形階層`) + After-Physics (`物理後`) evaluation order.
-  - CCDIK solver with Euler angle limits and link hierarchies.
-  - Append bone rotation/translation inheritance (`付与`).
-  - CPU/GPU SDEF spherical skinning with volume preservation.
-  - Real-time `Bullet3` rigid body & 6DoF spring constraint simulation.
-  - `.vmd` motion and `.vpd` pose playback.
+### Overview & Objective
+Transform ZenPMX into an interactive posing and animation preview suite (`TransformView` / `PmxEvaluator`). Operates strictly on `PmxRuntimeScene` during evaluation without mutating rest-pose `PmxDocument` (Golden Law 1). Implements MMD deterministic bone deform ordering (`Key = (isPhysicsAfterDeform, deformTier, index)`), append bone inheritance (`付与`), CCDIK constraint solving, volume-preserving SDEF spherical skinning, 60 Hz Bullet3 physics simulation, and `.vmd`/`.vpd` playback.
+
+| Ticket ID | Title | Target Subsystem | Assigned Subagent | Status | Dependencies | Commit |
+| :--- | :--- | :--- | :--- | :---: | :--- | :---: |
+| **Ticket 4.1** | **Evaluation Engine Core, Runtime Node Graph & Deform Tier Pipeline** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 3.6 | `d149e08` |
+| **Ticket 4.2** | **MMD CCDIK Solver with Iteration Clamping & Knee Euler Limits** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1 | `a242a1b` |
+| **Ticket 4.3** | **High-Fidelity SDEF (Spherical Skinning) & BDEF1/2/4 Vertex Deformer** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1, 4.2 | `5a6101a` |
+| **Ticket 4.4** | **Real-Time Bullet3 Physics Simulation & 6DoF Spring Constraints** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1 | `121ea4d` |
+| **Ticket 4.5** | **VMD (`.vmd`) Motion & VPD (`.vpd`) Pose File Importer and Playback Engine** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1 | `8fa77f5` |
+| **Ticket 4.6** | **TransformView Viewport Integration & Interactive Timeline Controls** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[ACTIVE]` | Tickets 4.2–4.5 | Pending |
+
+### Detailed Ticket Breakdown for Milestone 4:
+
+#### Ticket 4.1: Evaluation Engine Core, Runtime Node Graph & Deform Tier Pipeline
+* **Target:** `PmxEvaluator` (`src/evaluator/PmxRuntimeScene.h/.cpp`, `CMakeLists.txt`, `tests/tst_pmx_evaluator.cpp`)
+* **Objective:**
+  - Create `PmxEvaluator` static library target in `CMakeLists.txt` depending only on `PmxCore`, `glm`, and `QtCore`.
+  - Implement `PmxRuntimeScene`:
+    - Stores runtime bone nodes (`RuntimeBone`), morph weight accumulators, and evaluated world matrices $\mathbf{W}_b$.
+    - Deterministic evaluation sorting:
+      $$\text{Key}(i) = \left(\text{isPhysicsAfterDeform}(i),\; \text{deformTier}(i),\; i\right)$$
+    - Local transform composition: rest offset + interactive delta + morph offset.
+    - Append Bone Inheritance (`付与`): `InheritRotation` (`0x0100`) and `InheritTranslation` (`0x0200`) from `inheritParentIndex` weighted by `inheritWeight`.
+    - World matrix propagation down hierarchical child chains.
+    - Morph Accumulation: Group morph recursive unpacking; Vertex, Bone, UV, and Material morph weight accumulation.
+    - Non-destructive invariant: `PmxDocument` rest-pose geometry is NEVER modified.
+  - Test Suite: Register `tst_pmx_evaluator` in CTest verifying evaluation order, append bone inheritance math, and morph accumulators.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
+
+---
+
+## 7. Milestone 5 through 6 Roadmap Preview
+
 * **Milestone 5: The Top 8 Native C++ Community Power Tools (`v0.5.0-milestone5`)**
   - Tool 1: Curved Surface Auto-Rigging (`CurvedSurfaceRigGenerator` — `曲面自動設定`).
   - Tool 2: Semi-Standard Bone Generator (`SemiStandardBoneGenerator` — `準標準ボーン追加`).

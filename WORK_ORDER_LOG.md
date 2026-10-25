@@ -545,7 +545,7 @@
 * **Assigned Subagent:** `pmx_ui_engineer`
 * **Target Subsystems:** `PmxViewport` (`src/viewport/PmxViewportItem.h/.cpp`, `src/viewport/shaders/mesh.vert`, `src/viewport/shaders/pmx_edge.vert`, `tests/tst_pmx_viewport.cpp`)
 * **Date Issued:** 2026-10-25 05:20 UTC
-* **Status:** `[ACTIVE]`
+* **Status:** `[DONE]` (Committed at `3f175fb`)
 * **Incident / Problem Statement:**
   - Regression reported during interactive testing with `/home/oscarc/Documents/3D Objects/Barbara/Barbara.pmx` (15,601 vertices, 20 materials, 282 bones).
   - In **Weight Paint Mode**, geometry renders 100% cleanly and correctly using `m_heatmapPipeline` (draws indexed full mesh with `lines.vert` / `lines.frag`).
@@ -588,6 +588,259 @@
      - Expand `testBarbaraModelLoadingAndDiagnostics` with genuine offscreen/readback or bounding assertions verifying all projected shaded vertices fall strictly within valid camera view bounds ($X \in [200, 620]$).
   4. **QML Null Guards:**
      - Add null checks in `Main.qml` and `InspectorPanel.qml` to eliminate the 23 startup `TypeError` warnings.
+* **Adversarial QA Re-Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 06:46 UTC).
+* **DevOps Commit Receipt:** Committed at `3f175fb` with 100% passing tests (7/7 suites in 1.57s under ASan/UBSan).
+
+---
+
+## Milestone 4: Live TransformView (CCDIK, SDEF & Bullet3 Physics)
+
+### Ticket 4.1: Evaluation Engine Core, Runtime Node Graph & Deform Tier Pipeline
+* **Assigned Subagent:** `pmx_core_systems_engineer`
+* **Target Subsystem:** `PmxEvaluator` (`src/evaluator/`, `tests/tst_pmx_evaluator.cpp`, `CMakeLists.txt`)
+* **Date Issued:** 2026-10-25 06:40 UTC
+### Ticket 4.1: Evaluation Engine Core, Runtime Node Graph & Deform Tier Pipeline
+* **Assigned Subagent:** `pmx_core_systems_engineer`
+* **Target Subsystem:** `PmxEvaluator` (`src/evaluator/`, `tests/tst_pmx_evaluator.cpp`, `CMakeLists.txt`)
+* **Date Issued:** 2026-10-25 06:40 UTC
+* **Status:** `[DONE]` (Committed at `d149e08`)
+* **Specification & Architectural Invariants:**
+  1. **Build System & Target Isolation (Golden Law 1):**
+     - Add `PmxEvaluator` static library to `CMakeLists.txt` (`src/evaluator/PmxRuntimeScene.h`, `src/evaluator/PmxRuntimeScene.cpp`).
+     - Depends ONLY on `PmxCore`, `glm`, and `QtCore`. Zero Qt Quick / QML / GUI dependencies.
+     - Add test suite `tests/tst_pmx_evaluator.cpp` to `CMakeLists.txt` registered under CTest.
+  2. **`PmxRuntimeScene` Core Data Structures (`src/evaluator/PmxRuntimeScene.h/.cpp`):**
+     - Non-destructive evaluation invariant: Operates on internal scene node graph. Rest-pose `PmxDocument` is NEVER mutated.
+     - `struct RuntimeBone`:
+       - Rest position $\mathbf{p}_{\text{rest}}$ and parent index.
+       - Interactive user transform: `localTranslation` ($\Delta \mathbf{p}$), `localRotation` ($\Delta \mathbf{q}$).
+       - Morph transform: `morphTranslation`, `morphRotation`.
+       - Append inheritance cache: `appendTranslation`, `appendRotation`.
+       - Final local matrix $\mathbf{L}_b$ and evaluated world matrix $\mathbf{W}_b$.
+       - Inverse bind matrix $\mathbf{B}_b^{-1} = \text{translate}(-\mathbf{p}_{\text{rest}})$.
+       - Bone flags (`InheritRotation`, `InheritTranslation`, `FixedAxis`, `LocalAxis`, `PhysicsAfterDeform`).
+       - `deformTier` (`int32_t`).
+  3. **Deterministic Evaluation Scheduling (`evaluateBones`):**
+     - Sort all bone indices by evaluation key:
+       $$\text{Key}(i) = \left(\text{isPhysicsAfterDeform}(i),\; \text{deformTier}(i),\; i\right)$$
+     - Phase 1 (Pre-Physics): Evaluate all bones where `isPhysicsAfterDeform == false` in sorted order:
+       - Combine local transform: $\mathbf{t} = \Delta\mathbf{p} + \text{morphTranslation} + \text{appendTranslation}$.
+       - Combine local rotation: $\mathbf{q} = \text{normalize}(\Delta\mathbf{q} \times \text{morphRotation} \times \text{appendRotation})$.
+       - Fixed axis constraint (`0x0400`): If set, project rotation onto normalized `fixedAxisVector`.
+       - Append bone inheritance (`付与`):
+         - If `InheritRotation` (`0x0100`): $\mathbf{q}_{\text{inherit}} = \text{slerp}(\text{identity}, \text{parent}.\text{deltaRotation}, \text{inheritWeight})$.
+         - If `InheritTranslation` (`0x0200`): $\mathbf{t}_{\text{inherit}} = \text{parent}.\text{deltaTranslation} \times \text{inheritWeight}$.
+       - World matrix: $\mathbf{W}_b = \mathbf{W}_{\text{parent}} \times \mathbf{T}(\mathbf{p}_{\text{rest}} + \mathbf{t}) \times \mathbf{R}(\mathbf{q}) \times \mathbf{T}(-\mathbf{p}_{\text{rest}})$.
+     - Phase 2 (Post-Physics): Evaluate remaining bones (`isPhysicsAfterDeform == true`).
+  4. **Morph Weight Accumulation (`evaluateMorphs`):**
+     - Group Morphs: Unpack recursively with multiplicative weighting.
+     - Vertex Morphs: Accumulate vector displacements $\sum w_m \Delta\mathbf{v}_{m,i}$.
+     - Bone Morphs: Accumulate translations and slerp rotations per bone.
+     - Material Morphs: Accumulate Multiply and Add factors for diffuse, specular, ambient, edge, texture tint, sphere tint, toon tint.
+     - UV Morphs: Accumulate UV offsets.
+  5. **Deterministic Unit Test Suite (`tests/tst_pmx_evaluator.cpp`):**
+     - Verify deterministic sorting order matches `(isPhysicsAfterDeform, deformTier, index)`.
+     - Verify hierarchical child transform propagation ($Parent \to Child \to Grandchild$).
+     - Verify append rotation inheritance (`InheritRotation`) with weights $0.5$ and $-1.0$.
+     - Verify fixed-axis rotation clamping along arbitrary 3D axes.
+     - Verify Group morph recursive accumulation.
+     - Verify zero floating-point accumulation drift / rest-pose document invariance.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
+* **Adversarial QA Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 07:00 UTC).
+* **DevOps Commit Receipt:** Committed at `d149e08` with 8/8 test suites passing in 1.64s under ASan/UBSan.
+
+---
+
+### Ticket 4.2: MMD CCDIK Solver with Iteration Clamping & Knee Euler Limits
+* **Assigned Subagent:** `pmx_core_systems_engineer`
+* **Target Subsystem:** `PmxEvaluator` (`src/evaluator/MmdCcdIkSolver.h/.cpp`, `src/evaluator/PmxRuntimeScene.h/.cpp`, `tests/tst_pmx_evaluator.cpp`)
+* **Date Issued:** 2026-10-25 07:05 UTC
+* **Status:** `[DONE]` (Committed at `a242a1b`)
+* **Specification & Architectural Invariants:**
+  1. **Canonical MMD CCDIK Formulation:**
+     - For each IK chain in `PmxRuntimeScene`:
+       - Effector bone $\mathbf{e}$, Target bone $\mathbf{t}$, and ordered link bones $[l_0, l_1, \dots, l_{n-1}]$.
+       - Iteration limit `iterationCount` and per-iteration angle limit `angleLimit` (radians).
+       - For each iteration up to `iterationCount`:
+         - For each link $l_k$ (from leaf effector up to root):
+           - In world space, calculate vector to current effector position: $\mathbf{v}_e = \mathbf{p}_e - \mathbf{p}_{l_k}$.
+           - In world space, calculate vector to target position: $\mathbf{v}_t = \mathbf{p}_t - \mathbf{p}_{l_k}$.
+           - Normalize $\mathbf{v}_e$ and $\mathbf{v}_t$. If either length $< 10^{-6}$, skip link.
+           - Angle: $\theta = \arccos(\text{clamp}(\mathbf{v}_e \cdot \mathbf{v}_t, -1.0, 1.0))$. If $\theta < 10^{-6}$, continue.
+           - Clamping: $\theta_{\text{clamped}} = \min(\theta, \text{angleLimit})$.
+           - Axis: $\mathbf{a} = \text{normalize}(\mathbf{v}_e \times \mathbf{v}_t)$.
+           - Transform axis to link local space using inverse world orientation: $\mathbf{a}_{\text{local}} = \mathbf{q}_{l_k, \text{world}}^{-1} \cdot \mathbf{a}$.
+           - Compute delta quaternion: $\Delta \mathbf{q} = \text{angleAxis}(\theta_{\text{clamped}}, \mathbf{a}_{\text{local}})$.
+           - Update link local rotation: $\mathbf{q}_{\text{new}} = \Delta \mathbf{q} \times \mathbf{q}_{l_k, \text{local}}$.
+           - **Angle Limits (e.g. Knee Bones `hasLimits`):**
+             - Convert $\mathbf{q}_{\text{new}}$ to Euler angles ($ZXY$ extrinsic / $YXZ$ intrinsic).
+             - Clamp Euler angles to $[\text{minAngle}, \text{maxAngle}]$ specified in `PmxBone::IkLink`.
+             - Reconstruct clamped quaternion.
+           - Update world transform of $l_k$ and all its descendants (including effector) before proceeding to next link.
+           - Early exit if distance $\|\mathbf{p}_e - \mathbf{p}_t\| < 10^{-4}$.
+  2. **Integration into `PmxRuntimeScene`:**
+     - Integrate `solveIk()` into `PmxRuntimeScene::evaluate()` scheduled at proper tier order.
+     - Provide toggle to enable/disable IK solving per chain.
+  3. **Verification Suite (`tests/tst_pmx_evaluator.cpp`):**
+     - `testCcdIk2LinkReachable`: 2-link planar leg chain reaching target point within $10^{-3}$ tolerance.
+     - `testCcdIkKneeAngleLimits`: Knee joint with strictly positive X angle limit ($[0.008, \pi]$); assert knee never bends backwards (negative angle).
+     - `testCcdIkIterationClamping`: Verify solver respects `iterationCount` and `angleLimit`.
+     - `testCcdIkUnreachableTarget`: Target placed beyond total link length; verify stable extension along target vector without NaN/Inf.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
+* **Adversarial QA Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 07:33 UTC).
+* **DevOps Commit Receipt:** Committed at `a242a1b` with 8/8 test suites passing in 1.60s under ASan/UBSan.
+
+---
+
+### Ticket 4.3: High-Fidelity SDEF (Spherical Skinning) & BDEF1/2/4 Vertex Deformer
+* **Assigned Subagent:** `pmx_core_systems_engineer`
+* **Target Subsystem:** `PmxEvaluator` (`src/evaluator/PmxVertexDeformer.h/.cpp`, `src/evaluator/PmxRuntimeScene.h/.cpp`, `CMakeLists.txt`, `tests/tst_pmx_evaluator.cpp`)
+* **Date Issued:** 2026-10-25 07:36 UTC
+* **Status:** `[DONE]` (Committed at `5a6101a`)
+* **Specification & Architectural Invariants:**
+  1. **Canonical MMD Skinning Deformer:**
+     - Support all PMX deform types:
+       - `BDEF1` (type 0): $\mathbf{p}' = \mathbf{M}_{b0} \cdot \mathbf{p}$, $\mathbf{n}' = \text{normalize}(\mathbf{M}_{b0} \cdot \mathbf{n})$.
+       - `BDEF2` (type 1): $\mathbf{M} = w_0 \mathbf{M}_{b0} + (1 - w_0) \mathbf{M}_{b1}$.
+       - `BDEF4` (type 2): $\mathbf{M} = \sum_{i=0}^3 w_i \mathbf{M}_{bi}$.
+       - `SDEF` (type 3): Spherical deformation algorithm preserving joint volume (anti-pinching / anti-candy-wrapper):
+         - Parameters: bone 0, bone 1, weight $w_0$, center of rotation $\mathbf{C}$, directional bounds $\mathbf{R}_0, \mathbf{R}_1$.
+         - Slerp rotation between bone orientations: $\mathbf{q}_{\text{sdef}} = \text{slerp}(\mathbf{q}_1, \mathbf{q}_0, w_0)$.
+         - Compute blended rotation matrix $\mathbf{R}_{\text{sdef}} = \text{mat4\_cast}(\mathbf{q}_{\text{sdef}})$.
+         - Corrected center position and translation delta calculation matching canonical MMD specification.
+     - Rest-pose vertex positions and normals are offset by accumulated morph displacements ($\Delta\mathbf{v}$, $\Delta\mathbf{n}$) prior to skinning deformation.
+  2. **Integration into `PmxRuntimeScene`:**
+     - Expose `void deformVertices(std::vector<glm::vec3>& outPositions, std::vector<glm::vec3>& outNormals) const;`
+     - Threaded or optimized batch SIMD/loop execution for 100k+ vertices.
+  3. **Verification Suite (`tests/tst_pmx_evaluator.cpp`):**
+     - `testBdef1Skinning`: Vertex bound to single translating/rotating bone moves exactly with the bone.
+     - `testBdef2Skinning`: Vertex with 50/50 weight between two translating bones lands at mid-point.
+     - `testBdef4Skinning`: 4-bone weighted average matches mathematical expectation.
+     - `testSdefVolumePreservation`: 90-degree joint bend compares SDEF vs BDEF2; proves radial distance from joint center $\mathbf{C}$ is preserved significantly closer to rest radius without volume collapse.
+     - `testMorphPlusSkinningCombination`: Vertex morph displacement combined with bone rotation yields expected transformed position.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
+* **Strike 1 Incident & Remediation:**
+  - *Incident:* QA audit identified that auxiliary bounds in `deformSdef` used `deltaR = (rTotal - rRest) * 0.5f` with unrotated `rRest`, violating rigid body rotation invariance.
+  - *Remediation:* Per Golden Law 5, worker subagent `154ce97d-6dd0-4c92-9360-9520dd3359ea` was sent the failure logs and updated the formula to canonical spec:
+    $$\mathbf{r}_0 = \text{mat3}(\mathbf{M}_{b0}) \mathbf{R}_0 - \mathbf{R}_{\text{sdef}} \mathbf{R}_0, \quad \mathbf{r}_1 = \text{mat3}(\mathbf{M}_{b1}) \mathbf{R}_1 - \mathbf{R}_{\text{sdef}} \mathbf{R}_1, \quad \Delta \mathbf{r} = w_0 \mathbf{r}_0 + w_1 \mathbf{r}_1$$
+    Added `testSdefRigidRotationInvariance` and `testSdefDifferentialRotationWithBounds`.
+* **Adversarial QA Re-Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 08:20 UTC).
+* **DevOps Commit Receipt:** Committed at `5a6101a` with 8/8 test suites passing in 1.62s under ASan/UBSan.
+
+---
+
+### Ticket 4.4: Real-Time Bullet3 Physics Simulation & 6DoF Spring Constraints
+* **Assigned Subagent:** `pmx_core_systems_engineer`
+* **Target Subsystem:** `PmxEvaluator` (`src/evaluator/PmxPhysicsEngine.h/.cpp`, `src/evaluator/PmxRuntimeScene.h/.cpp`, `CMakeLists.txt`, `tests/tst_pmx_evaluator.cpp`)
+* **Date Issued:** 2026-10-25 08:23 UTC
+* **Status:** `[DONE]` (Committed at `121ea4d`)
+* **Specification & Architectural Invariants:**
+  1. **Build System & Dependencies:**
+     - Locate Bullet3 in `CMakeLists.txt` via `find_package(Bullet QUIET)` or explicit Bullet libraries (`BulletDynamics`, `BulletCollision`, `LinearMath`).
+     - Link Bullet to `PmxEvaluator`.
+  2. **`PmxPhysicsEngine` Core Architecture (`src/evaluator/PmxPhysicsEngine.h/.cpp`):**
+     - Initialize `btDiscreteDynamicsWorld` with `btDbvtBroadphase`, `btDefaultCollisionConfiguration`, `btCollisionDispatcher`, `btSequentialImpulseConstraintSolver`.
+     - Standard MMD gravity: $\mathbf{g} = (0.0f, -98.0f, 0.0f)$ (10x gravity in MMD decimeter units).
+     - Rigid Body Ingestion:
+       - Sphere: `btSphereShape(radius)`
+       - Box: `btBoxShape(btVector3(size.x, size.y, size.z))`
+       - Capsule: `btCapsuleShape(radius, height)`
+       - Type 0 (Static / Bone-following): Kinematic rigid body. Rest position and orientation synchronized from bone each frame.
+       - Type 1 (Dynamic): Dynamic Bullet rigid body simulated under gravity and collisions. Evaluated transform synchronizes back into bone world matrix.
+       - Type 2 (Dynamic with Bone Alignment): Dynamic physics simulation preserving bone direction alignment.
+       - Collision filtering: `collisionGroup` (1 << groupIndex) and `collisionMask`.
+     - 6DoF Spring Constraints:
+       - `btGeneric6DofSpringConstraint` between bodies A and B.
+       - Linear limit min/max and spring stiffness.
+       - Angular limit min/max (transformed to Right-Handed coordinates) and rotational spring stiffness.
+  3. **Integration into `PmxRuntimeScene`:**
+     - In `loadDocument()`: Construct physics world from `doc.rigidBodies` and `doc.joints`.
+     - In `evaluate()`:
+       - Step physics simulation: `m_physicsEngine->stepSimulation(deltaTime)`.
+       - Update Type 1 & 2 bone world matrices from physics bodies during post-physics bone evaluation pass.
+     - Reset physics state on scene reset.
+  4. **Verification Suite (`tests/tst_pmx_evaluator.cpp`):**
+     - `testBulletRigidBodyFreeFall`: Dynamic body falls downward along $-Y$ under gravity over multiple simulation steps.
+     - `testBulletKinematicBoneTracking`: Kinematic rigid body moves identically with its parent bone.
+     - `testBulletSpringConstraintStability`: 6DoF spring oscillates stably without numerical explosion under ASan/UBSan.
+     - `testBulletCollisionFiltering`: Rigid bodies with non-intersecting collision masks pass through each other without contact response.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
+* **Strike 1 Incident & Remediation:**
+  - *Incident:* QA audit identified that: (1) `syncDynamicBones` overwrote translation for `physicsMode == 2` instead of preserving parent hierarchy translation; (2) `createBtTransform` used `setEulerZYX` (intrinsic ZYX / extrinsic XYZ) instead of canonical extrinsic $ZXY$; (3) move assignment operator lacked safe `clear()` teardown; (4) shapes lacked dimension clamping; (5) tests lacked compound Euler rotation and mode 2 coverage.
+  - *Remediation:* Per Golden Law 5, worker subagent `352b7f9d-b69b-477a-a0f4-33c613871087` was sent the failure logs and resolved all items: preserved translation on `boneWorld[3]` for mode 2, constructed canonical $ZXY$ quaternion `qy * qx * qz`, implemented custom move assignment with `clear()`, clamped dimensions with `std::max(dim, 1e-4f)`, and added `testBulletPhysicsAndBoneMode` and `testBulletCompoundEulerRotation`.
+* **Adversarial QA Re-Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 09:09 UTC).
+* **DevOps Commit Receipt:** Committed at `121ea4d` with 8/8 test suites passing in 1.66s under ASan/UBSan.
+
+---
+
+### Ticket 4.5: VMD (`.vmd`) Motion & VPD (`.vpd`) Pose File Importer and Playback Engine
+* **Assigned Subagent:** `pmx_core_systems_engineer`
+* **Target Subsystem:** `PmxEvaluator` (`src/evaluator/VmdImporter.h/.cpp`, `src/evaluator/VpdImporter.h/.cpp`, `src/evaluator/PmxAnimationPlayer.h/.cpp`, `src/evaluator/PmxRuntimeScene.h/.cpp`, `CMakeLists.txt`, `tests/tst_pmx_evaluator.cpp`)
+* **Date Issued:** 2026-10-25 09:15 UTC
+* **Status:** `[DONE]` (Committed at `8fa77f5`)
+* **Specification & Architectural Invariants:**
+  1. **Binary VMD 2.0 Ingestion (`src/evaluator/VmdImporter.h/.cpp`):**
+     - Header: 30 bytes signature (`"Vocaloid Motion Data 0002\0"`), 20 bytes model name (Shift-JIS).
+     - Bone Keyframes (`VmdBoneFrame`):
+       - `nameJp` (15 bytes Shift-JIS decoded to `QString`).
+       - `frameIndex` (`uint32_t`).
+       - `translation` (`glm::vec3` converted to Right-Handed coordinates).
+       - `rotation` (`glm::quat` converted to Right-Handed coordinates).
+       - `interpolation[4][4][4]` (64-byte Bézier control points for X, Y, Z translation and rotation curves).
+     - Morph Keyframes (`VmdMorphFrame`):
+       - `nameJp` (15 bytes Shift-JIS decoded to `QString`).
+       - `frameIndex` (`uint32_t`).
+       - `weight` (`float`).
+     - Camera, Light, and IK Toggle Keyframes (`VmdIkFrame` with per-bone IK enable flags).
+  2. **VPD Text Pose File Ingestion (`src/evaluator/VpdImporter.h/.cpp`):**
+     - Parse ASCII `.vpd` pose files:
+       - Header: `Vocaloid Pose Data file`.
+       - Bones: `Bone{Index}{BoneName}` with translation and quaternion rotation.
+       - Morphs: `Morph{Index}{MorphName}` with float weight.
+  3. **Animation Timeline & Playback Engine (`src/evaluator/PmxAnimationPlayer.h/.cpp`):**
+     - Track evaluation per bone and per morph sorted by frame index.
+     - Frame evaluation at arbitrary floating-point time $t$:
+       - Hermite/Bézier cubic spline interpolation for translation and rotation curves using VMD control points.
+       - Slerp quaternion interpolation between bone rotation keyframes.
+       - Linear interpolation between morph keyframes.
+       - Dynamic IK enable/disable toggling according to IK keyframes.
+     - Playback controls: `setFrame(float frame)`, `currentFrame()`, `maxFrame()`, `isPlaying()`, `play()`, `pause()`, `stop()`, `setLoop(bool)`.
+     - Synchronization: `applyToScene(PmxRuntimeScene& scene)` applies interpolated transforms directly to scene bones and morphs before `scene.evaluate()`.
+  4. **Verification Suite (`tests/tst_pmx_evaluator.cpp`):**
+     - `testVmdBinaryImportAndKeyframes`: Synthesize valid VMD 2.0 binary buffer; verify correct Shift-JIS bone/morph decoding and frame sorting.
+     - `testVmdInterpolationEvaluation`: Sample intermediate frame between keyframe 0 and 10; verify accurate cubic Bézier and quaternion slerp output.
+     - `testVpdTextPoseImport`: Ingest sample VPD text pose; verify bone translations and rotations match expected values.
+     - `testVmdIkSwitchingTimeline`: Ingest VMD with IK enable toggle keyframes; verify `PmxRuntimeScene::isIkEnabled` reflects the active timeline state.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
+* **Strike 1 Incident & Remediation:**
+  - *Incident:* QA audit identified that: (1) passing `NaN` to `PmxAnimationPlayer` resulted in `*track.end()` heap buffer over-read; (2) untrusted `ikCount` in `VmdImporter` was reserved without physical buffer bounds checks; (3) truncated camera/light/shadow blocks desynchronized the read stream; (4) lack of negative fuzzing tests.
+  - *Remediation:* Per Golden Law 5, worker subagent `3647a18a-bf2d-4481-92c6-7dc44bd0e5d9` was sent the failure logs and resolved all items: added NaN guards in `setFrame`, `evaluateBezier`, and track evaluators (`it == track.end()` and `it == track.begin()` checks); division-based bounds checking on all counts in `VmdImporter`; added `testAnimationPlayerNanHandling` and `testVmdMalformedBufferRejection`.
+* **Adversarial QA Re-Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 10:06 UTC).
+* **DevOps Commit Receipt:** Committed at `8fa77f5` with 8/8 test suites passing in 1.70s under ASan/UBSan.
+
+---
+
+### Ticket 4.6: TransformView Viewport Integration & Interactive Timeline Controls
+* **Assigned Subagent:** `pmx_ui_engineer`
+* **Target Subsystems:** `PmxViewport` & `pmx-editor` (`src/viewport/PmxViewportItem.h/.cpp`, `src/viewport/PmxTransformViewBridge.h/.cpp`, `src/app/qml/TransformViewPanel.qml`, `src/app/qml/TimelineBar.qml`, `CMakeLists.txt`, `tests/tst_pmx_viewport.cpp`)
+* **Date Issued:** 2026-10-25 10:10 UTC
+* **Status:** `[ACTIVE]`
+* **Specification & Architectural Invariants:**
+  1. **Viewport TransformView Dynamic Buffer Streaming:**
+     - Connect `PmxRuntimeScene` and `PmxAnimationPlayer` into `PmxViewportItem`.
+     - Provide runtime mode toggle: `EditMode` (static rest pose with interactive gizmo editing) vs `TransformViewMode` (live animation playback, CCDIK, SDEF, and Bullet3 physics).
+     - In TransformView mode, dynamic VBO streaming: upload `scene.deformedPositions()` and `scene.deformedNormals()` each frame to `m_meshVertexBuffer`.
+     - Update bone wireframe visualizer to dynamic bone world matrices.
+     - Update rigid body and joint wireframe visualizers to dynamic physics bodies.
+  2. **QML Timeline Bar & Controls (`src/app/qml/TimelineBar.qml`, `TransformViewPanel.qml`):**
+     - Timeline scrubber: Current frame spinbox / slider, max frame, playback controls (Play, Pause, Stop, Step Forward, Step Back, Loop toggle).
+     - File actions: Load Motion (`.vmd`), Load Pose (`.vpd`), Reset Pose.
+     - Simulation controls: Physics enable/disable toggle, Physics Reset button.
+  3. **Verification Suite (`tests/tst_pmx_viewport.cpp`):**
+     - `testTransformViewModeDeformedMeshUpload`: Verify vertex buffer updates when stepping animation frames.
+     - `testTransformViewTimelineScrubbing`: Scrubbing timeline updates scene evaluation.
+     - `testTransformViewPhysicsToggling`: Toggling physics state starts/stops Bullet simulation cleanly.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
 
 
 
