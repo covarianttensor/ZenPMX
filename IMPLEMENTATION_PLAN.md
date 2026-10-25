@@ -9,7 +9,7 @@
 
 ```text
 ================================================================================
-[████████████████████████░░░░░░░░░░░░░░░░] 60% COMPLETE
+[██████████████████████████░░░░░░░░░░░░░░] 65% COMPLETE
 ================================================================================
 Project: ZenPMX (Native Linux PMX Editor)
 Repository: https://github.com/covarianttensor/ZenPMX (Public)
@@ -95,7 +95,7 @@ Transform the viewport from a flat diffuse renderer into a production-grade MMD 
 | :--- | :--- | :--- | :--- | :---: | :--- | :---: |
 | **Ticket 3.1** | **MMD Toon Ramp Shading & Sphere Map (`.sph` / `.spa`) Multi-Pass QRhi Pipeline** | `PmxViewport` | `pmx_ui_engineer` | `[DONE]` | Ticket 2.5 | `2ab3af4` |
 | **Ticket 3.2** | **Inverted-Hull Edge Outline Pass with Per-Vertex/Per-Material Width Scaling** | `PmxViewport` | `pmx_ui_engineer` | `[DONE]` | Ticket 3.1 | `d14666f` |
-| **Ticket 3.3** | **Interactive 3D Transform Gizmos (Translate/Rotate/Scale) & Symmetric Editing** | `PmxViewport` / `PmxModels` | `pmx_ui_engineer` | `[TODO]` | Ticket 3.2 |
+| **Ticket 3.3** | **Interactive 3D Transform Gizmos (Translate/Rotate/Scale) & Symmetric Editing** | `PmxViewport` / `PmxModels` | `pmx_ui_engineer` | `[DONE]` | Ticket 3.2 | `e72f5d7` |
 | **Ticket 3.4** | **Wireframe Visualizers for Bones, Rigid Bodies (Sphere/Box/Capsule) & 6DoF Joints** | `PmxViewport` | `pmx_ui_engineer` | `[TODO]` | Ticket 3.3 |
 | **Ticket 3.5** | **Interactive Weight Painting Engine with Heatmap Visualization & Radius/Falloff Brush** | `PmxViewport` / `PmxModels` | `pmx_ui_engineer` | `[TODO]` | Ticket 3.4 |
 

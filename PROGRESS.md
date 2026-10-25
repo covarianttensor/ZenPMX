@@ -9,10 +9,10 @@
 * **Project Name:** ZenPMX (Native Linux PMX Editor)
 * **GitHub Repository:** [`https://github.com/covarianttensor/ZenPMX`](https://github.com/covarianttensor/ZenPMX) (Public)
 * **Active Phase:** Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode)
-* **Next Target:** Ticket 3.3 (Interactive 3D Transform Gizmos & Symmetric Editing)
-* **Overall Completion Level:** 60%
-* **Current Working Tree:** Clean (`main` branch commit `d14666f`)
-* **Test Suite Status:** 7/7 CTest suites passing (114 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.35s)
+* **Next Target:** Ticket 3.4 (Wireframe Visualizers for Bones, Rigid Bodies & 6DoF Joints)
+* **Overall Completion Level:** 65%
+* **Current Working Tree:** Clean (`main` branch commit `e72f5d7`)
+* **Test Suite Status:** 7/7 CTest suites passing (114 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.32s)
 
 ---
 
@@ -45,6 +45,7 @@
 | :--- | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
 | 2026-10-25 01:43 | **Ticket-3.1** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | `2ab3af4` | 7/7 CTest (19/19 QtTest) | ~42k | MMD toon ramp shading, vertical V sampling, .sph/.spa sphere maps, PmxTextureCache, clamp samplers. (Strike 1 resolved). |
 | 2026-10-25 02:04 | **Ticket-3.2** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | `d14666f` | 7/7 CTest (22/22 QtTest) | ~38k | Inverted-hull outline pass, per-vertex/material width scaling, CW front-face culling, QSB deserialization test. (Strike 1 resolved). |
+| 2026-10-25 02:35 | **Ticket-3.3** | Viewport / Models (`PmxViewport` / `PmxModels`) | `pmx_ui_engineer` | `e72f5d7` | 7/7 CTest (31/31 QtTest) | ~45k | Interactive 3D gizmos (Translate/Rotate/Scale), ray picking, snapping, symmetry, sparse undo commands. (Strike 1 resolved). |
 
 ---
 
@@ -149,6 +150,25 @@
 * **Corrective Action:**
   - Lead Architect fed exact failure log back to `pmx_ui_engineer` under Strike 1.
   - Subagent instructed to deserialize shaders into `QShader`, add negative edgeScale assertions, test zero-vertex edge materials, and add finite guards.
+### Incident 8: Ticket 3.3 GLM Experimental & PmxBone Member Name Errors (Strike 1)
+* **Date:** 2026-10-25 02:52 UTC
+* **Subsystem:** `PmxViewport` / `tests` (`tests/tst_pmx_viewport.cpp`)
+* **Root Cause:**
+  1. `glm/gtx/...` experimental extensions included without `#define GLM_ENABLE_EXPERIMENTAL`.
+  2. Member access error: `PmxBone` has `nameJp` / `nameEn`, but test accessed `b.name`.
+* **Corrective Action:**
+  - Lead Architect fed exact compiler diagnostic back to `pmx_ui_engineer` under Strike 1.
+  - Subagent instructed to define `GLM_ENABLE_EXPERIMENTAL` and use `nameJp`.
+
+### Incident 9: Ticket 3.3 Snapping Non-Finite Vulnerability & Boundary Test Gaps (Strike 1)
+* **Date:** 2026-10-25 02:59 UTC
+* **Subsystem:** `PmxViewport` (`src/viewport/PmxGizmo.cpp`, `tests/tst_pmx_viewport.cpp`)
+* **Root Cause:**
+  1. `m_translationSnap > 1e-4f` lacked `std::isfinite()` check, causing `Inf` snapping to evaluate to `0.0 * Inf = NaN`.
+  2. Boundary test cases (zero/negative screen dimensions, scale = 0, Mode None, snap = Inf, out-of-bounds indices, null controller, `mergeWith` rejection) were omitted.
+* **Corrective Action:**
+  - Lead Architect fed exact audit report back to `pmx_ui_engineer` under Strike 1.
+  - Subagent instructed to add `std::isfinite()` guards and expand test suite with all mandated boundary assertions.
 
 ---
 

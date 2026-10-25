@@ -375,3 +375,55 @@
   - Add explicit assertions for negative `edgeScale` (`-1.0f`).
   - Add test asserting `hasEdge == true` and `indexCount == 0` for empty materials (`faceVertexCount == 0`).
   - Add `std::isfinite(mat.edgeSize)` and `std::isfinite(mat.edgeColor.a)` checks in `partitionMaterialBatches`.
+
+---
+
+### Ticket 3.3: Interactive 3D Transform Gizmos (Translate/Rotate/Scale) & Symmetric Editing
+* **Assigned Subagent:** `pmx_ui_engineer`
+* **Target Subsystem:** `PmxViewport` / `PmxModels` (Target 4 & Target 3)
+* **Date Issued:** 2026-10-25 02:35 UTC
+* **Status:** `[DONE]` (Committed at `e72f5d7`)
+* **Specification:**
+  - `PmxGizmo` Engine (`src/viewport/PmxGizmo.h/.cpp`):
+    - `GizmoMode`: `None`, `Translate`, `Rotate`, `Scale`.
+    - `GizmoAxis`: `None`, `AxisX`, `AxisY`, `AxisZ`, `PlaneXY`, `PlaneYZ`, `PlaneXZ`.
+    - `CoordSpace`: `World`, `Local`.
+    - Raycasting / Picking: Given screen ray $(\mathbf{o}, \mathbf{d})$, test collision against axis shafts/planes and return hovered/selected handle.
+    - Transform calculation: Project mouse delta along active axis/plane; compute position delta $\Delta\mathbf{p}$, rotation $\Delta\mathbf{q}$, or scale $\Delta\mathbf{s}$. Support numeric snapping (distance, angle, scale).
+    - Symmetric Editing (`対称編集`): When enabled, mirror deltas across $X=0$: $(-\Delta x, \Delta y, \Delta z)$ for symmetric vertices (pairing $|x_A + x_B| < \epsilon, |y_A - y_B| < \epsilon, |z_A - z_B| < \epsilon$) or symmetric bones (`左` $\leftrightarrow$ `右`).
+    - Dynamic scale: Scale gizmo size by camera distance so on-screen pixel size remains constant.
+    - Overlay geometry: Generate colored line/mesh vertices for active gizmo (Red=X, Green=Y, Blue=Z, Yellow=Active).
+  - Undo Commands (`src/models/PmxUndoCommands.h/.cpp`):
+    - Implement `PmxVertexTransformCommand`: sparse deltas `(vertexIndex, oldPos, newPos, oldNorm, newNorm)` with `id()`, `mergeWith()` during continuous dragging, `redo()`, and `undo()`.
+    - Implement `PmxBoneTransformCommand`: sparse deltas `(boneIndex, oldPos, newPos, oldRot, newRot)`.
+  - Viewport Integration (`src/viewport/PmxViewportItem.h/.cpp`):
+    - Connect mouse press, move, release to gizmo picking and dragging.
+    - On drag release, commit transform command to `controller()->undoStack()`.
+    - Render gizmo lines/handles on top of the scene with depth test disabled or depth bias so gizmo is always visible.
+  - Test Suite (`tests/tst_pmx_viewport.cpp`):
+    - Verify gizmo ray-axis hit testing.
+    - Verify translation, rotation, and scaling delta math.
+    - Verify numerical snapping.
+    - Verify symmetric vertex mirroring ($X \to -X$).
+    - Verify `PmxVertexTransformCommand` and `PmxBoneTransformCommand` undo/redo with `QUndoStack`.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+#### Ticket 3.3 — Revision 2 (Strike 1 Fix)
+* **Date & Timestamp:** 2026-10-25 02:52 UTC
+* **Reason for Revision:**
+  - Strike 1 compilation failure in `tests/tst_pmx_viewport.cpp`:
+    1. GLM experimental extensions (`glm/gtx/quaternion.hpp`, `norm.hpp`) included without `#define GLM_ENABLE_EXPERIMENTAL`.
+    2. Member access error: `PmxBone` has `nameJp` / `nameEn`, not `name`.
+* **Revision Directives:**
+  - Define `GLM_ENABLE_EXPERIMENTAL` before including GLM GTX headers.
+  - Fix bone name field references to `nameJp`.
+
+#### Ticket 3.3 — Revision 3 (Strike 1 QA Remediation)
+* **Date & Timestamp:** 2026-10-25 02:59 UTC
+* **Reason for Revision:**
+  - Strike 1 audit failure detected by `pmx_qa_adversary`:
+    1. Non-finite snapping vulnerability in `PmxGizmo.cpp`: extreme `Inf` snapping caused `0.0 * Inf = NaN` in translation/rotation/scale deltas.
+    2. Missing boundary test coverage in `tests/tst_pmx_viewport.cpp` (zero-length rays, out-of-bounds indices, empty selections, null controller, `mergeWith` rejection).
+* **Revision Directives:**
+  - Add `std::isfinite()` guards before rounding with snapping parameters in `PmxGizmo.cpp`.
+  - Add explicit assertions for zero/negative screen dimensions, `scale = 0`, `GizmoMode::None`, `snap = Inf`, out-of-bounds indices, null controllers, and `mergeWith` rejection in `tests/tst_pmx_viewport.cpp`.
