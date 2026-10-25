@@ -149,9 +149,24 @@ Transform ZenPMX into an interactive posing and animation preview suite (`Transf
 | **Ticket 4.6** | **TransformView Viewport Integration & Interactive Timeline Controls** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[DONE]` | Tickets 4.2–4.5 | `7c0ce9a` |
 | **Ticket 4.7** | **Core Evaluator Physics Alignment to Animated Bones** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.6 | `1dc196b` |
 | **Ticket 4.8** | **TransformView Viewport Playback, Dynamic VBO & TimelineBar Hardening** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[DONE]` | Ticket 4.7 | `0d86f15` |
-| **Ticket 4.9** | **CCDIK Knee Angle Limits & 1-DOF Hinge Solver Hardening** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.8 | Pending |
+| **Ticket 4.9** | **CCDIK Knee Angle Limits & 1-DOF Hinge Solver Hardening** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.8 | `316a7bf` |
+| **Ticket 4.10** | **Deform Tier Multi-Pass Evaluation, D-Bone Append IK Propagation & CCD-IK Plane Solver Hardening** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.9 | `9bb0c05` |
 
 ### Detailed Ticket Breakdown for Milestone 4:
+
+#### Ticket 4.10: Deform Tier Multi-Pass Evaluation, D-Bone Append IK Propagation & CCD-IK Plane Solver Hardening
+* **Target:** `PmxEvaluator` (`src/evaluator/PmxRuntimeScene.h/.cpp`, `src/evaluator/MmdCcdIkSolver.h/.cpp`, `tests/tst_pmx_evaluator.cpp`)
+* **Objective:**
+  - In `PmxRuntimeScene.cpp`:
+    - Refactor `evaluate()` into the canonical 4-pass Deform Tier algorithm (Saba/Three.js standard): Pass 1 (local transforms), Pass 2 (hierarchy propagation), Pass 3 (interleaved `deformDepth` loop: IK solving followed by append bone evaluation), Pass 4 (final hierarchy sync).
+    - Update Append Rotation (`0x0100`) to incorporate `srcBone.ikRotation` when the source bone is an IK link ($R_{\text{src}} = \mathbf{q}_{\text{src,ik}} \cdot (\mathbf{q}_{\text{src,user}} \cdot \mathbf{q}_{\text{src,morph}})$), supporting negative weights via quaternion conjugate.
+    - Ensure D-Bones (`足D`, `ひざD`, `足首D` at `deformTier = 1`) evaluate after the IK solvers and propagate their world transforms down their subtrees, allowing the 919 leg mesh vertices bound to D-Bones to deform accurately.
+    - Convert IK link angle limits across all 3 axes by multiplying by `-1` and swapping min/max ($\min_{RH} = -\max_{LH}$, $\max_{RH} = -\min_{LH}$).
+  - In `MmdCcdIkSolver.cpp`:
+    - Implement Saba-equivalent `SolvePlane` for 1-DOF hinge links: project into link local space, test signed step $\pm \theta$, apply iteration-0 sign inversion if $-\theta$ is within limits, clamp to $[\min X_{RH}, \max X_{RH}]$, and extract `ikRotation = rotate(theta, X) * inverse(userRotation)`.
+  - In `tests/tst_pmx_evaluator.cpp`:
+    - Add comprehensive regression tests asserting that at frame 39 of Barbara + Motion 1, `足D.L` and `ひざD.L` head positions match `足.L` and `ひざ.L`, and deformed leg mesh vertices follow the bent knee pose rather than the FK rest pose.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
 
 #### Ticket 4.9: CCDIK Knee Angle Limits & 1-DOF Hinge Solver Hardening
 * **Target:** `PmxEvaluator` (`src/evaluator/PmxRuntimeScene.cpp`, `src/evaluator/MmdCcdIkSolver.h/.cpp`, `tests/tst_pmx_evaluator.cpp`)

@@ -11,8 +11,8 @@
 * **Active Phase:** Milestone 5: The Top 8 Native C++ Community Power Tools
 * **Active Target:** Milestone 5 Initialization & Ticket 5.1
 * **Overall Completion Level:** 97%
-* **Current Working Tree:** Clean (feature commit `7c0ce9a`, release tag `v0.4.0-milestone4`)
-* **Test Suite Status:** 8/8 CTest suites passing (179 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.68s)
+* **Current Working Tree:** Clean (feature commit `9bb0c05`)
+* **Test Suite Status:** 8/8 CTest suites passing (180+ unit tests, 0 failures, 100% clean under ASan + UBSan in 6.95s)
 
 ---
 
@@ -62,7 +62,8 @@
 | 2026-10-25 17:57 | **Ticket-4.6** | Viewport / App (`PmxViewport` / `pmx-editor`) | `pmx_ui_engineer` | `7c0ce9a` | 8/8 CTest (53/53 QtTest) | ~48k | Live TransformView viewport integration, dynamic VBO stream, TimelineBar.qml. (Strike 1 resolved QML read-only property & rest-pose material sync). |
 | 2026-10-25 19:35 | **Ticket-4.7** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `1dc196b` | 8/8 CTest (49/49 QtTest) | ~35k | Dynamic rigid body alignment to animated bone transforms, resolving detached dress/skirt glitch. |
 | 2026-10-25 19:40 | **Ticket-4.8** | Viewport / App (`PmxViewport` / `pmx-editor`) | `pmx_ui_engineer` | `0d86f15` | 8/8 CTest (54/54 QtTest) | ~40k | Continuous animation playback timer hardening (fixed ns/ms delta bug), dynamic VBO streaming, TimelineBar QML reactive bindings. |
-| 2026-10-25 21:12 | **Ticket-4.9** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | Pending | 8/8 CTest (50/50 QtTest) | ~38k | CCDIK knee angle limits LH-to-RH normalization & 1-DOF hinge projection in MmdCcdIkSolver; QA Audit PASS. |
+| 2026-10-25 21:12 | **Ticket-4.9** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `316a7bf` | 8/8 CTest (50/50 QtTest) | ~38k | CCDIK knee angle limits LH-to-RH normalization & 1-DOF hinge projection in MmdCcdIkSolver; QA Audit PASS. |
+| 2026-10-25 22:52 | **Ticket-4.10** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `9bb0c05` | 8/8 CTest (50/50 QtTest) | ~35k | Canonical 4-pass Deform Tier loop, D-Bone Append IK propagation, and CCD-IK Plane Solver hardening. PASSED. |
 
 
 ---

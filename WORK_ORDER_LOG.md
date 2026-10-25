@@ -927,6 +927,59 @@
        - Verified Frame 39 left knee flexion $+32.6^\circ$ ($0.5689$ rad $> 0.35$ rad) matching Blender ground truth, ankle-to-IK tracking distance $< 0.02$ units, and downward thigh bone direction (`dir.y = -0.927`).
 * **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
 * **Adversarial QA Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 21:42 UTC; 50/50 evaluator tests pass, 8/8 CTest pass clean under ASan/UBSan).
+* **DevOps Commit Receipt:** Committed at `316a7bf` on 2026-10-25 21:44 UTC.
+
+---
+
+### Ticket 4.10: Deform Tier Multi-Pass Evaluation, D-Bone Append IK Propagation & CCD-IK Plane Solver Hardening
+* **Assigned Subagent:** `pmx_core_systems_engineer`
+* **Target Subsystem:** `PmxEvaluator` (`src/evaluator/PmxRuntimeScene.h/.cpp`, `src/evaluator/MmdCcdIkSolver.h/.cpp`, `tests/tst_pmx_evaluator.cpp`)
+* **Date Issued:** 2026-10-25 22:15 UTC
+* **Status:** `[DONE]` (Committed at `9bb0c05`)
+* **Adversarial QA Audit Verdict:** `PASS`
+  - Canonical 4-pass deform tier verified matching Saba/Three.js standard.
+  - Append bone IK rotation propagation ($R_{\text{src}} = \mathbf{q}_{\text{src,ik}} \cdot (\mathbf{q}_{\text{src,user}} \cdot \mathbf{q}_{\text{src,morph}})$) verified for D-Bones with quaternion conjugate for negative weights.
+  - 1-DOF CCD-IK Plane Solver verified with link-local projection, signed step testing, iteration-0 sign inversion, and 3-axis limit negation ($\min_{RH} = -\max_{LH}, \max_{RH} = -\min_{LH}$).
+  - Boundary safety: recursion depth limit (`depth > 256`) and non-finite vector division guards added.
+  - Test suite passes 100% clean under ASan/UBSan (all 8 CTest suites, 50/50 in `tst_pmx_evaluator`).
+* **DevOps Commit Receipt:** Committed at `9bb0c05e9e9497e3c9936570a0b1e3c7ae3b736b` on 2026-10-25 22:52 UTC.
+* **Specification & Architectural Invariants:**
+  1. **Canonical 4-Pass Deform Tier Architecture (`PmxRuntimeScene.cpp`):**
+     - Refactor `PmxRuntimeScene::evaluate()` into the canonical 4-pass Deform Tier algorithm (Saba/Three.js standard):
+       - **Pass 1 (Local Transforms):** Compute $\mathbf{M}_{\text{local}} = \text{translate}(\mathbf{t}_{\text{base}}) \cdot \text{mat4}(\mathbf{q}_{\text{base}})$ from rest offset + VMD + morph for all bones.
+       - **Pass 2 (Hierarchy Propagation):** Propagate world matrices down the parent-child tree starting from all root bones.
+       - **Pass 3 (Interleaved Deform Tier Pass):** In order of `deformDepth` (and bone index for ties):
+         - **IK Solvers:** If the bone is an IK root (flag `0x0020`), execute `MmdCcdIkSolver::solveChain`. Solve each link in the chain, update link local transforms, and recursively propagate world matrices down each link's child subtree.
+         - **Append Bones (Grant Transforms / 付与親):** If the bone has `InheritRotation` (`0x0100`) or `InheritTranslation` (`0x0200`):
+           - Look up source bone `inheritParentIndex`.
+           - **MANDATORY IK INHERITANCE INVARIANT:** If the source bone is an IK link or has IK rotation, the inherited rotation MUST include `ikRotation`:
+             $$R_{\text{src}} = \mathbf{q}_{\text{src,ik}} \cdot (\mathbf{q}_{\text{src,user}} \cdot \mathbf{q}_{\text{src,morph}})$$
+             $$T_{\text{src}} = \mathbf{t}_{\text{src,user}} + \mathbf{t}_{\text{src,morph}}$$
+           - Blend by `inheritWeight` $w$:
+             $$\mathbf{q}_{\text{append}} = \begin{cases} \text{slerp}(I, R_{\text{src}}, w) & \text{if } w \ge 0 \\ \text{slerp}(I, \text{conjugate}(R_{\text{src}}), -w) & \text{if } w < 0 \end{cases}$$
+             $$\mathbf{t}_{\text{append}} = T_{\text{src}} \cdot w$$
+           - Combine local transform and recursively propagate down the append bone's child subtree.
+       - **Pass 4 (Final Hierarchy Synchronization):** Re-synchronize all root bone hierarchies.
+  2. **Semi-Standard D-Bone (`足D`, `ひざD`, `足首D`) Skinning Invariant:**
+     - In standard MMD models (including Barbara), 100% of leg mesh vertices are weighted to D-Bones, not IK bones. D-Bones are Append bones at `deformDepth = 1` pointing to `足.L`, `ひざ.L`, `足首.L`. With Pass 3 interleaved evaluation and IK inheritance, D-Bones receive the solved IK pose and propagate to the deformed mesh vertices.
+  3. **CCD-IK Hinge Plane Solver Alignment (`MmdCcdIkSolver.cpp`):**
+     - For 1-DOF hinge links (such as knee `ひざ.L` / `ひざ.R` where only X rotation is non-zero):
+       - Transform effector position $\mathbf{p}_e$ and IK target position $\mathbf{p}_t$ into link local coordinates:
+         $$\mathbf{v}_e = \text{normalize}(\mathbf{M}_{\text{link}}^{-1} \mathbf{p}_e), \quad \mathbf{v}_t = \text{normalize}(\mathbf{M}_{\text{link}}^{-1} \mathbf{p}_t)$$
+       - Compute unsigned rotation angle $\theta = \arccos(\text{clamp}(\mathbf{v}_e \cdot \mathbf{v}_t, -1, 1))$ clamped by `chain.limitAngle`.
+       - Test $+ \theta$ and $-\theta$ around the hinge axis $\hat{\mathbf{a}} = (1, 0, 0)$: choose the signed step $\Delta \theta = \pm \theta$ that maximizes $(\text{rot}(\Delta \theta, \hat{\mathbf{a}}) \mathbf{v}_e) \cdot \mathbf{v}_t$.
+       - **Iteration-0 Sign Flip:** If $\theta_{\text{new}} = \theta_{\text{plane}} + \Delta \theta$ violates the limits $[\min X_{RH}, \max X_{RH}]$, but $-\theta_{\text{new}}$ lies within the limits, invert the sign: $\theta_{\text{new}} = -\theta_{\text{new}}$.
+       - Clamp $\theta_{\text{new}} = \text{clamp}(\theta_{\text{new}}, \min X_{RH}, \max X_{RH})$ and update:
+         $$\mathbf{q}_{\text{ik}} = \text{angleAxis}(\theta_{\text{new}}, \hat{\mathbf{a}}) \cdot \text{inverse}(\mathbf{q}_{\text{vmd}})$$
+     - In `PmxRuntimeScene::loadDocument`: convert angle limits for all three axes by multiplying by `-1` and swapping min/max:
+       $$\min_{RH} = -\max_{LH}, \quad \max_{RH} = -\min_{LH}$$
+  4. **Verification Suite (`tests/tst_pmx_evaluator.cpp`):**
+     - Add regression tests verifying that at frame 39 of Barbara + Motion 1:
+       - `足D.L` head position matches `足.L` head position (within $0.005$).
+       - `ひざD.L` head position matches `ひざ.L` head position (within $0.005$).
+       - `足首D.L` head position matches `足首.L` head position (within $0.005$).
+       - Deformed leg mesh vertices (which are weighted 100% to D-Bones) follow the bent knee pose rather than the FK rest pose.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
 
 ---
 
