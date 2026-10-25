@@ -225,3 +225,50 @@
     - Test complete Undo and Redo cycle via `PmxDocumentController::mergeModel` with zero state drift.
   - Update `CMakeLists.txt` adding `PmxMerger.h/.cpp` to `PmxCore`, and registering `tst_pmx_merger`.
 * **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_merger`
+
+---
+
+### Ticket 2.5: Assimp Accessory Importer (`AssimpImporter.cpp`)
+* **Assigned Subagent:** `pmx_core_engineer`
+* **Target Subsystem:** `PmxCore` (Target 1)
+* **Date Issued:** 2026-10-25 00:48 UTC
+* **Status:** `[DONE]` (Committed at `c87c34f`)
+* **Specification:**
+  - Build System:
+    - Update `CMakeLists.txt` to find and link `assimp` (`find_package(assimp REQUIRED)` or pkg-config / library lookup). Add `src/core/AssimpImporter.h` and `src/core/AssimpImporter.cpp` to `PmxCore`.
+  - Core Implementation (`src/core/AssimpImporter.h/.cpp`):
+    - Implement `AssimpImporter` class in namespace `Pmx`:
+      - `struct AssimpImportOptions { float scale = 1.0f; bool generateNormals = true; bool flipUVs = true; bool createRootBone = true; QString rootBoneNameJp = QString::fromUtf8("全ての親"); QString rootBoneNameEn = "Root"; };`
+      - `static std::unique_ptr<PmxDocument> importFile(const QString& filePath, const AssimpImportOptions& options = {}, QString* errorMessage = nullptr);`
+      - `static std::unique_ptr<PmxDocument> importFromMemory(const void* data, size_t length, const QString& hintFormat = "obj", const AssimpImportOptions& options = {}, QString* errorMessage = nullptr);`
+    - Configure Assimp importer with post-processing flags:
+      - `aiProcess_Triangulate`: Ensure all polygons are converted to triangles.
+      - `aiProcess_GenSmoothNormals` / `aiProcess_GenNormals`: Ensure every mesh has normals.
+      - `aiProcess_JoinIdenticalVertices`: Deduplicate identical vertices.
+      - `aiProcess_SortByPType`: Remove non-triangle primitives (lines/points).
+      - Coordinate system conversion: Convert Assimp coordinates to PMX native Left-Handed Y-Up ($p_{LH} = (x, y, -z)$ or `aiProcess_MakeLeftHanded` / `aiProcess_FlipWindingOrder`).
+    - Mesh & Vertex Conversion:
+      - Accumulate submeshes into `PmxDocument::vertices` and `PmxDocument::faces`.
+      - Assign BDEF1 skinning to default root bone (`全ての親` / `Root`) at `(0, 0, 0)` with weight 1.0.
+      - UV coordinates: `texCoords.x` and `texCoords.y` (flipped if requested for MMD UV convention).
+    - Material Conversion:
+      - Convert Assimp materials to `PmxMaterial`: diffuse color, specular color, specular strength, ambient, alpha, flags (double-sided / edge / shadow).
+      - Extract diffuse texture paths (`aiTextureType_DIFFUSE`), deduplicate and append to `doc->textures`, setting `mat.textureIndex`.
+    - Hierarchy & Default Structures:
+      - Add root center bone if `createRootBone` is true (`全ての親` / `Root`, index 0).
+      - Add default `Root` and `表情` display frames in `doc->displayFrames`.
+      - Set header: PMX 2.0, proper index sizes based on element counts.
+  - Test Suite (`tests/tst_assimp_import.cpp`):
+    - Register `tst_assimp_import` in `CMakeLists.txt` and CTest.
+    - Test synthetic OBJ loading (e.g. quad cube, textured mesh) via `importFromMemory` and file.
+    - Assert triangle count, vertex count, normal normalization ($|\vec{n}| \approx 1$), UV bounds, material diffuse/texture mapping, root bone presence, and lossless roundtrip export/import via `PmxWriter` and `PmxReader`.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_assimp_import`
+
+#### Ticket 2.5 — Revision 2 (Adversarial QA Audit Hardening)
+* **Date & Timestamp:** 2026-10-25 01:10 UTC
+* **Reason for Revision:**
+  - Strike 1 audit finding by `pmx_qa_adversary`:
+    1. Schema Bug: `createRootBone = false` still assigned `boneIndices[0] = 0` when `doc->bones` was empty. Corrected to assign `boneIndices = {-1, -1, -1, -1}` and `weights = {0.0f, 0.0f, 0.0f, 0.0f}`.
+    2. Test Coverage: Added `testTextureImport()` verifying Windows backslash normalization and texture deduplication, and `testMultiMeshImport()` verifying vertex offsets and multi-object partitioning.
+    3. Defensive Null Safety: Hardened against null pointers in corrupt Assimp mesh buffers (`mMeshes`, `mVertices`, `mNormals`, `mFaces`, `mMaterials`).
+

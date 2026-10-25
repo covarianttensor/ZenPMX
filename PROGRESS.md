@@ -8,11 +8,11 @@
 ## 1. Project Status Overview
 * **Project Name:** ZenPMX (Native Linux PMX Editor)
 * **GitHub Repository:** [`https://github.com/covarianttensor/ZenPMX`](https://github.com/covarianttensor/ZenPMX) (Public)
-* **Active Phase:** Phase 1 / Milestone 1 Completed (`v0.1.0-milestone1` pushed to GitHub)
-* **Next Target:** Phase 2 / Milestone 2 (Complete 8-Tab Spreadsheet Inspector & Kitbash Merger)
-* **Overall Completion Level:** ~45%
-* **Current Working Tree:** Clean (`main` branch commit `44caf36`)
-* **Test Suite Status:** 4/4 CTest suites passing (51 unit tests, 0 failures, 100% clean under ASan + UBSan)
+* **Active Phase:** Milestone 1 & 2 Completed (`v0.1.0-milestone1`, `v0.2.0-milestone2` pushed to GitHub)
+* **Next Target:** Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode)
+* **Overall Completion Level:** 50%
+* **Current Working Tree:** Clean (`main` branch commit `c87c34f`)
+* **Test Suite Status:** 7/7 CTest suites passing (107 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.32s)
 
 ---
 
@@ -29,7 +29,7 @@
 | 2026-10-24 16:05 | **Ticket-1.4** | Viewport / App (`PmxViewport`) | `pmx_ui_engineer` | `d6c5d7e` | 3/3 CTest (10/10 QtTest) | ~52k | `QQuickRhiItem` viewport, orbital camera, GLSL shaders, `Main.qml`. (Strike 2 rollback, fresh worker resolved). |
 | 2026-10-24 18:51 | **Ticket-1.5** | AI Co-Pilot / MCP (`PmxMcpServer`) | `pmx_core_engineer` | `b7fed90` | 4/4 CTest (16/16 QtTest) | ~32k | `pmx-mcp` CLI, JSON-RPC 2.0, `get_model_summary`, undoable `rename_bone`. (1 retry: Strike 1 resolved). |
 
-### Milestone 2: 8-Tab Spreadsheet Inspector & Kitbash Merger (In Progress)
+### Milestone 2: 8-Tab Spreadsheet Inspector & Kitbash Merger (Completed & Tagged `v0.2.0-milestone2`)
 
 | Date / UTC | Ticket ID | Subsystem Target | Subagent | Commit | Test Status | Token Burn | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
@@ -37,6 +37,7 @@
 | 2026-10-24 22:54 | **Ticket-2.2** | UI / Viewport (`pmx-editor`) | `pmx_ui_engineer` | `f8d69e6` | 4/4 CTest (14/14 QtTest) | ~32k | 8 modular QML tabs, InspectorPanel, BatchOperationDialog, multi-select, search filter, ASan/UBSan clean. |
 | 2026-10-24 23:45 | **Ticket-2.3** | Core / Serialization (`PmxCore`) | `pmx_core_engineer` | `6de48c9` | 5/5 CTest (14/14 QtTest) | ~35k | Legacy PMD 1.0 binary importer, Shift-JIS decoding, BDEF2 weights, texture/sphere split, English/physics extensions. |
 | 2026-10-25 00:38 | **Ticket-2.4** | Core / Models (`PmxCore` / `PmxModels`) | `pmx_core_engineer` | `44caf36` | 6/6 CTest (15/15 QtTest) | ~35k | Kitbash merger engine, 7-entity index remapping, standard bone deduplication, PMX 2.1 elevation, undoable controller integration. |
+| 2026-10-25 01:10 | **Ticket-2.5** | Core / Importer (`PmxCore`) | `pmx_core_engineer` | `c87c34f` | 7/7 CTest (12/12 QtTest) | ~34k | Assimp accessory importer, OBJ/FBX/glTF, LH coordinates, BDEF1 root bone, materials/textures, QA hardened. |
 
 ---
 
@@ -100,3 +101,31 @@
 * **Verification Command:** `ctest --test-dir build --output-on-failure`
 * **Test Pass Rate:** 4/4 test suites, 51 test functions, 0 failures, 0 ASan/UBSan errors.
 * **Architect Sign-Off:** Milestone 1 Acceptance Gate passed. All target boundaries and invariants verified.
+
+### Incident 5: Ticket 2.5 Vertex Bone Indices Without Root Bone & Corrupt Scene Safety (Strike 1)
+* **Date:** 2026-10-25 01:10 UTC
+* **Subsystem:** `PmxCore` (`src/core/AssimpImporter.cpp`)
+* **Root Cause:**
+  1. `createRootBone = false` still assigned `vert.boneIndices[0] = 0` when `doc->bones.empty()` was true, causing vertices to reference non-existent bone index 0.
+  2. Hollow test omission in `testWithoutRootBone()` which asserted `doc->bones.empty()` but skipped checking `vert.boneIndices`.
+  3. Unprotected null-pointer vectors on corrupt Assimp scenes (`mMeshes`, `mVertices`, `mNormals`, `mFaces`, `mMaterials`).
+* **Corrective Action:**
+  - Audited and caught by `pmx_qa_adversary`.
+  - Replicated failure deterministically with `QCOMPARE(doc->vertices[0].boneIndices[0], -1)`.
+  - Updated `AssimpImporter.cpp` to assign `boneIndices = {-1, -1, -1, -1}` and `weights = {0, 0, 0, 0}` when `createRootBone` is disabled.
+  - Added full null guards across all Assimp mesh and material properties.
+  - Added `testTextureImport()` and `testMultiMeshImport()` test cases.
+  - Full suite passed 100% cleanly under ASan/UBSan; committed at `c87c34f`.
+
+---
+
+## 5. Milestone 2 Acceptance & Sign-Off Receipt
+* **Release Tag:** `v0.2.0-milestone2`
+* **Commit:** `c87c34f`
+* **Verification Command:** `ctest --test-dir build --output-on-failure`
+* **Test Pass Rate:** 7/7 test suites (107 unit tests), 0 failures, 0 ASan/UBSan errors in 1.32s.
+* **Architect Sign-Off:** Milestone 2 (8-Tab Spreadsheet Inspector & Kitbash Merger) Acceptance Gate PASSED.
+  - All 8 canonical PMX tabs fully implemented with virtualized table models, batch operations, multi-select, and search/filtering.
+  - Multi-format ingestion operational: Lossless PMX 2.0/2.1 reader/writer, Legacy PMD 1.0 binary importer, Assimp accessory importer (.obj, .fbx, .gltf), and non-destructive kitbash merger with 7-entity mathematical index remapping.
+  - Ready for Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode).
+

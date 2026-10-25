@@ -9,12 +9,12 @@
 
 ```text
 ================================================================================
-[██████████████████░░░░░░░░░░░░░░░░░░░░░░] 45% COMPLETE
+[████████████████████░░░░░░░░░░░░░░░░░░░░] 50% COMPLETE
 ================================================================================
 Project: ZenPMX (Native Linux PMX Editor)
 Repository: https://github.com/covarianttensor/ZenPMX (Public)
-Status: Milestone 1 (The Tracer Bullet) VERIFIED & PUSHED (v0.1.0-milestone1)
-Active Phase: Milestone 2 (Complete 8-Tab Spreadsheet Inspector & Kitbash Merger)
+Status: Milestone 1 & 2 VERIFIED & PUSHED (v0.1.0-milestone1, v0.2.0-milestone2)
+Active Phase: Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode)
 ```
 
 ---
@@ -24,7 +24,7 @@ Active Phase: Milestone 2 (Complete 8-Tab Spreadsheet Inspector & Kitbash Merger
 | Milestone ID | Title | Est. Tickets | Status | Gate Verdict | Release Tag |
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | **Milestone 1** | **The Tracer Bullet (End-to-End Pipeline)** | 5 | `[DONE]` | **PASS** | `v0.1.0-milestone1` |
-| **Milestone 2** | **Complete 8-Tab Spreadsheet Inspector & Kitbash Merger** | 5 | `[IN_PROGRESS]` | Pending | `v0.2.0-milestone2` |
+| **Milestone 2** | **Complete 8-Tab Spreadsheet Inspector & Kitbash Merger** | 5 | `[DONE]` | **PASS** | `v0.2.0-milestone2` |
 | **Milestone 3** | **Full MMD Shader Pipeline & Interactive 3D Edit Mode** | 5 | `[TODO]` | Pending | `v0.3.0-milestone3` |
 | **Milestone 4** | **Live TransformView (CCDIK, SDEF & Bullet3 Physics)** | 5 | `[TODO]` | Pending | `v0.4.0-milestone4` |
 | **Milestone 5** | **The Top 8 Native C++ Community Power Tools** | 5 | `[TODO]` | Pending | `v0.5.0-milestone5` |
@@ -44,7 +44,7 @@ Active Phase: Milestone 2 (Complete 8-Tab Spreadsheet Inspector & Kitbash Merger
 
 ---
 
-## 4. Milestone 2 Ticket Registry: 8-Tab Inspector & Kitbash Merger
+## 4. Milestone 2 Ticket Registry: 8-Tab Inspector & Kitbash Merger (`100% COMPLETE`)
 
 ### Overview & Objective
 Scale out the spreadsheet data engineering capabilities to all 8 canonical PMX tabs with high-performance virtualization (100,000+ vertices), multi-format import (`.pmd`, `.obj`, `.fbx`, `.gltf`), and non-destructive kitbash merging (`追加選択`) with index remapping.
@@ -55,7 +55,7 @@ Scale out the spreadsheet data engineering capabilities to all 8 canonical PMX t
 | **Ticket 2.2** | **Spreadsheet UI Completion: 8 QML Tabs, Multi-Select & Search/Filter** | `PmxModels` / `pmx-editor` | `pmx_ui_engineer` | `[DONE]` | Ticket 2.1 | `f8d69e6` |
 | **Ticket 2.3** | **Legacy PMD Binary Importer (`PmdImporter.cpp`)** | `PmxCore` | `pmx_core_engineer` | `[DONE]` | Ticket 1.2 | `6de48c9` |
 | **Ticket 2.4** | **Kitbash Merger Engine (`PmxMerger.cpp` — 追加選択)** | `PmxCore` / `PmxModels` | `pmx_core_engineer` | `[DONE]` | Ticket 2.1, Ticket 2.3 | `44caf36` |
-| **Ticket 2.5** | **Assimp Accessory Importer (`AssimpImporter.cpp`)** | `PmxCore` | `pmx_core_engineer` | `[TODO]` | Ticket 2.4 |
+| **Ticket 2.5** | **Assimp Accessory Importer (`AssimpImporter.cpp`)** | `PmxCore` | `pmx_core_engineer` | `[DONE]` | Ticket 2.4 | `c87c34f` |
 
 ### Detailed Ticket Breakdown for Milestone 2:
 
@@ -86,15 +86,50 @@ Scale out the spreadsheet data engineering capabilities to all 8 canonical PMX t
 
 ---
 
-## 5. Milestone 3 through 6 Roadmap Preview
+## 5. Milestone 3 Ticket Registry: Full MMD Shader Pipeline & Interactive 3D Edit Mode
 
-* **Milestone 3: Full MMD Shader Pipeline & Interactive 3D Edit Mode (`v0.3.0-milestone3`)**
-  - MMD Toon ramp textures (`toon01..10.bmp` & custom toons).
-  - Sphere map evaluation (`.sph` multiplicative, `.spa` additive, sub-textures).
-  - Inverted-Hull Edge outline shader with per-vertex and per-material scaling.
-  - Wireframe rigid body shapes (Sphere, Box, Capsule) and Joint coordinate crosses.
-  - 3D Translate/Rotate/Scale gizmos with world/local bone space and symmetric editing (`対称編集`).
-  - Interactive BDEF/SDEF Weight Painting brush with heatmap overlay.
+### Overview & Objective
+Transform the viewport from a flat diffuse renderer into a production-grade MMD render pipeline (`QRhi`), featuring toon ramp shading (`toon01..10.bmp`), sphere maps (`.sph`/`.spa`), inverted-hull outlines with vertex scaling, wireframe visualizers for bones/physics/joints, 3D translation/rotation/scale gizmos, and an interactive weight painting heatmap brush.
+
+| Ticket ID | Title | Target Subsystem | Assigned Subagent | Status | Dependencies | Commit |
+| :--- | :--- | :--- | :--- | :---: | :--- | :---: |
+| **Ticket 3.1** | **MMD Toon Ramp Shading & Sphere Map (`.sph` / `.spa`) Multi-Pass QRhi Pipeline** | `PmxViewport` | `pmx_ui_engineer` | `[TODO]` | Ticket 2.5 |
+| **Ticket 3.2** | **Inverted-Hull Edge Outline Pass with Per-Vertex/Per-Material Width Scaling** | `PmxViewport` | `pmx_ui_engineer` | `[TODO]` | Ticket 3.1 |
+| **Ticket 3.3** | **Interactive 3D Transform Gizmos (Translate/Rotate/Scale) & Symmetric Editing** | `PmxViewport` / `PmxModels` | `pmx_ui_engineer` | `[TODO]` | Ticket 3.2 |
+| **Ticket 3.4** | **Wireframe Visualizers for Bones, Rigid Bodies (Sphere/Box/Capsule) & 6DoF Joints** | `PmxViewport` | `pmx_ui_engineer` | `[TODO]` | Ticket 3.3 |
+| **Ticket 3.5** | **Interactive Weight Painting Engine with Heatmap Visualization & Radius/Falloff Brush** | `PmxViewport` / `PmxModels` | `pmx_ui_engineer` | `[TODO]` | Ticket 3.4 |
+
+### Detailed Ticket Breakdown for Milestone 3:
+
+#### Ticket 3.1: MMD Toon Ramp Shading & Sphere Map (`.sph` / `.spa`) Multi-Pass QRhi Pipeline
+* **Target:** `PmxViewport` (`src/viewport/shaders/pmx_mesh.frag`, `src/viewport/PmxViewportRenderer.cpp`, `src/viewport/PmxTextureCache.h/.cpp`)
+* **Objective:** Implement full MMD lighting evaluation in GLSL 450: default MMD directional light ($(-0.5, -1.0, -0.5)$), half-lambert diffuse calculation, 1D toon ramp texture lookup (`toon01.bmp`..`toon10.bmp` embedded fallbacks or material custom toons), and sphere texture mapping (multiplicative `.sph` and additive `.spa` based on view-space reflected normal).
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+#### Ticket 3.2: Inverted-Hull Edge Outline Pass with Per-Vertex/Per-Material Width Scaling
+* **Target:** `PmxViewport` (`src/viewport/shaders/pmx_edge.vert`, `src/viewport/shaders/pmx_edge.frag`, `src/viewport/PmxViewportRenderer.cpp`)
+* **Objective:** Implement the classic MMD inverted-hull silhouette outline rendering pass. Vertex shader extrudes vertices along their normals scaled by `material.edgeSize * vertex.edgeScale`. Front-face culling is used to render only the back-faces as solid outline geometry tinted by `material.edgeColor`.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+#### Ticket 3.3: Interactive 3D Transform Gizmos (Translate/Rotate/Scale) & Symmetric Editing
+* **Target:** `PmxViewport` / `PmxModels` (`src/viewport/PmxGizmo.h/.cpp`, `src/viewport/PmxViewportItem.cpp`)
+* **Objective:** Interactive on-screen 3D gizmos for Translation (arrows), Rotation (rings), and Scaling (cubes). Includes screen-space raycasting/picking, world vs. local coordinate frame toggling, numerical snapping, symmetric editing (`対称編集`) mirroring transforms across the $X=0$ plane, and pushing undoable commands to `QUndoStack`.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+#### Ticket 3.4: Wireframe Visualizers for Bones, Rigid Bodies (Sphere/Box/Capsule) & 6DoF Joints
+* **Target:** `PmxViewport` (`src/viewport/shaders/pmx_wireframe.vert/.frag`, `src/viewport/PmxWireframeRenderer.cpp`)
+* **Objective:** Render bone octahedral wireframes and parent-child connection lines; render Bullet physics rigid body geometric shapes (spheres, boxes, capsules) colored by collision group and type (Static=Blue, Dynamic=Orange, Bone-aligned=Yellow); render 6DoF spring joint coordinate crosses with angular limit arcs.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+#### Ticket 3.5: Interactive Weight Painting Engine with Heatmap Visualization & Radius/Falloff Brush
+* **Target:** `PmxViewport` / `PmxModels` (`src/viewport/PmxWeightPaintBrush.h/.cpp`, `src/viewport/shaders/pmx_weight.frag`)
+* **Objective:** Viewport weight painting mode. Colors vertices using a classic gradient heatmap (Blue=0.0 $\to$ Cyan $\to$ Green $\to$ Yellow $\to$ Red=1.0) for the selected bone. Interactive spherical brush with configurable radius, strength, and falloff curves (linear/gaussian). Real-time normalization of BDEF2/BDEF4 weights pushed to `PmxDocumentController::undoStack()`.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+---
+
+## 6. Milestone 4 through 6 Roadmap Preview
+
 * **Milestone 4: Live TransformView (CCDIK, SDEF & Bullet3 Physics) (`v0.4.0-milestone4`)**
   - `PmxEvaluator` runtime scene with 60 Hz scheduler.
   - Deform Tier (`変形階層`) + After-Physics (`物理後`) evaluation order.
@@ -117,3 +152,4 @@ Scale out the spreadsheet data engineering capabilities to all 8 canonical PMX t
   - `PmxPluginHost` Unix socket bridge with live modeless WinForms support.
   - Full 10-tool MCP JSON-RPC 2.0 Co-Pilot server for AI assistants.
   - Release packaging (standalone AppImage / binary distribution).
+
