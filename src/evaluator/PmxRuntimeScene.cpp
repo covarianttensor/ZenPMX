@@ -79,12 +79,12 @@ void PmxRuntimeScene::loadDocument(const PmxDocument& doc) {
                 link.boneIndex = srcLink.boneIndex;
                 link.hasLimits = (srcLink.hasAngleLimit != 0);
                 if (link.hasLimits) {
-                    link.minAngle.x = -srcLink.limitMax.x;
-                    link.maxAngle.x = -srcLink.limitMin.x;
-                    link.minAngle.y = -srcLink.limitMax.y;
-                    link.maxAngle.y = -srcLink.limitMin.y;
-                    link.minAngle.z = srcLink.limitMin.z;
-                    link.maxAngle.z = srcLink.limitMax.z;
+                    link.minAngle.x = -std::max(srcLink.limitMin.x, srcLink.limitMax.x);
+                    link.maxAngle.x = -std::min(srcLink.limitMin.x, srcLink.limitMax.x);
+                    link.minAngle.y = -std::max(srcLink.limitMin.y, srcLink.limitMax.y);
+                    link.maxAngle.y = -std::min(srcLink.limitMin.y, srcLink.limitMax.y);
+                    link.minAngle.z = std::min(srcLink.limitMin.z, srcLink.limitMax.z);
+                    link.maxAngle.z = std::max(srcLink.limitMin.z, srcLink.limitMax.z);
                 }
                 chain.links.push_back(link);
             }

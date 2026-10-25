@@ -910,6 +910,26 @@
 
 ---
 
+### Ticket 4.9: CCDIK Knee Angle Limits & 1-DOF Hinge Solver Hardening
+* **Assigned Subagent:** `pmx_core_systems_engineer`
+* **Target Subsystem:** `PmxEvaluator` (`src/evaluator/PmxRuntimeScene.cpp`, `src/evaluator/MmdCcdIkSolver.h/.cpp`, `tests/tst_pmx_evaluator.cpp`)
+* **Date Issued:** 2026-10-25 21:12 UTC
+* **Status:** `[DONE]` (Pending Commit)
+* **Specification & Architectural Invariants:**
+  1. **Restore Native PMX IK Link Limits (`PmxRuntimeScene.cpp`):**
+     - In `PmxRuntimeScene::loadDocument`: canonical unconditional mapping from Left-Handed PMX limits into Right-Handed runtime limits ($\min X_{RH} = -\max X_{LH}$, $\max X_{RH} = -\min X_{LH}$, etc.). Correctly maps $[-180^\circ, -0.5^\circ]$ in LH into $[+0.5^\circ, +180^\circ]$ in RH without ad-hoc bone-name conditions.
+  2. **1-DOF Hinge Axis Constraint in CCDIK (`MmdCcdIkSolver.cpp`):**
+     - In `MmdCcdIkSolver::solveChain`: for 1-DOF joints where $Y$ and $Z$ limits are fixed to 0 (`minAngle.y == maxAngle.y == 0.0f && minAngle.z == maxAngle.z == 0.0f`), constrain the local rotation axis $\mathbf{a}_{\text{local}}$ to $(1, 0, 0)$ with signed angle scaling $\Delta \theta = \theta_{\text{clamped}} \cdot \mathbf{a}_{\text{local}}.x$, eliminating 3D rotation coupling and Euler conversion distortion.
+  3. **Verification Suite (`tests/tst_pmx_evaluator.cpp`):**
+     - Added `testAnimationKneeFlexionAndIkLegPoses`:
+       - Synthetic 2-bone chain under forward target offset, verifying hinge 1-DOF zeroing on Y/Z.
+       - Live evaluation on `Barbara.pmx` with `Motion 1.vmd` across frames 26, 39, 53, 119, 224, 379.
+       - Verified Frame 39 left knee flexion $+32.6^\circ$ ($0.5689$ rad $> 0.35$ rad) matching Blender ground truth, ankle-to-IK tracking distance $< 0.02$ units, and downward thigh bone direction (`dir.y = -0.927`).
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
+* **Adversarial QA Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 21:42 UTC; 50/50 evaluator tests pass, 8/8 CTest pass clean under ASan/UBSan).
+
+---
+
 ## Milestone 5: The Top 8 Native C++ Community Power Tools
 
 ### Ticket 5.1: Semi-Standard Bone Generator & Multi-Stage / Material Morph Tools

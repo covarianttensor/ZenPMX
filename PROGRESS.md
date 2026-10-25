@@ -61,7 +61,9 @@
 | 2026-10-25 17:06 | **Ticket-4.5** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `8fa77f5` | 8/8 CTest (47/47 QtTest) | ~45k | VMD motion & VPD pose file importer, cubic Bézier spline & quaternion slerp playback engine. (Strike 1 resolved NaN over-read & untrusted buffer bounds checks). |
 | 2026-10-25 17:57 | **Ticket-4.6** | Viewport / App (`PmxViewport` / `pmx-editor`) | `pmx_ui_engineer` | `7c0ce9a` | 8/8 CTest (53/53 QtTest) | ~48k | Live TransformView viewport integration, dynamic VBO stream, TimelineBar.qml. (Strike 1 resolved QML read-only property & rest-pose material sync). |
 | 2026-10-25 19:35 | **Ticket-4.7** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `1dc196b` | 8/8 CTest (49/49 QtTest) | ~35k | Dynamic rigid body alignment to animated bone transforms, resolving detached dress/skirt glitch. |
-| 2026-10-25 19:40 | **Ticket-4.8** | Viewport / App (`PmxViewport` / `pmx-editor`) | `pmx_ui_engineer` | Pending | Audited (PASS) | ~40k | Continuous animation playback timer hardening (fixed ns/ms delta bug), dynamic VBO streaming, TimelineBar QML reactive bindings. |
+| 2026-10-25 19:40 | **Ticket-4.8** | Viewport / App (`PmxViewport` / `pmx-editor`) | `pmx_ui_engineer` | `0d86f15` | 8/8 CTest (54/54 QtTest) | ~40k | Continuous animation playback timer hardening (fixed ns/ms delta bug), dynamic VBO streaming, TimelineBar QML reactive bindings. |
+| 2026-10-25 21:12 | **Ticket-4.9** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | Pending | 8/8 CTest (50/50 QtTest) | ~38k | CCDIK knee angle limits LH-to-RH normalization & 1-DOF hinge projection in MmdCcdIkSolver; QA Audit PASS. |
+
 
 ---
 

@@ -117,7 +117,20 @@ void MmdCcdIkSolver::solveChain(PmxRuntimeScene& scene, const IkChain& chain) {
             }
             a_local /= lenLocal;
 
-            glm::quat dq = glm::angleAxis(thetaClamped, a_local);
+            glm::quat dq;
+            if (link.hasLimits &&
+                std::abs(link.minAngle.y - link.maxAngle.y) < 1e-4f &&
+                std::abs(link.minAngle.z - link.maxAngle.z) < 1e-4f) {
+                float rotX = a_local.x;
+                if (std::abs(rotX) < 1e-6f) {
+                    continue;
+                }
+                glm::vec3 axis(rotX >= 0.0f ? 1.0f : -1.0f, 0.0f, 0.0f);
+                float stepAngle = std::min(thetaClamped * std::abs(rotX), limitAngle);
+                dq = glm::angleAxis(stepAngle, axis);
+            } else {
+                dq = glm::angleAxis(thetaClamped, a_local);
+            }
             glm::quat q_new = glm::normalize(scene.bone(link.boneIndex).ikRotation * dq);
 
             if (link.hasLimits) {

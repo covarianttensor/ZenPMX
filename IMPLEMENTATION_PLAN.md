@@ -148,9 +148,18 @@ Transform ZenPMX into an interactive posing and animation preview suite (`Transf
 | **Ticket 4.5** | **VMD (`.vmd`) Motion & VPD (`.vpd`) Pose File Importer and Playback Engine** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1 | `8fa77f5` |
 | **Ticket 4.6** | **TransformView Viewport Integration & Interactive Timeline Controls** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[DONE]` | Tickets 4.2–4.5 | `7c0ce9a` |
 | **Ticket 4.7** | **Core Evaluator Physics Alignment to Animated Bones** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.6 | `1dc196b` |
-| **Ticket 4.8** | **TransformView Viewport Playback, Dynamic VBO & TimelineBar Hardening** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[DONE]` | Ticket 4.7 | Pending |
+| **Ticket 4.8** | **TransformView Viewport Playback, Dynamic VBO & TimelineBar Hardening** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[DONE]` | Ticket 4.7 | `0d86f15` |
+| **Ticket 4.9** | **CCDIK Knee Angle Limits & 1-DOF Hinge Solver Hardening** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.8 | Pending |
 
 ### Detailed Ticket Breakdown for Milestone 4:
+
+#### Ticket 4.9: CCDIK Knee Angle Limits & 1-DOF Hinge Solver Hardening
+* **Target:** `PmxEvaluator` (`src/evaluator/PmxRuntimeScene.cpp`, `src/evaluator/MmdCcdIkSolver.h/.cpp`, `tests/tst_pmx_evaluator.cpp`)
+* **Objective:**
+  - In `PmxRuntimeScene.cpp`: restore native PMX IK link limits (`link.minAngle = srcLink.limitMin`, `link.maxAngle = srcLink.limitMax`) without negating $X$ and $Y$ angles, preventing knee locking to $-0.5^\circ$.
+  - In `MmdCcdIkSolver.cpp`: for 1-DOF hinge joints (where $Y$ and $Z$ limits are 0), project the rotation axis directly onto the local $X$ axis, preventing 3D rotation coupling and Euler conversion distortion.
+  - Regression Test: In `tests/tst_pmx_evaluator.cpp`, add tests verifying Barbara's knee flexion and leg poses across frames 26, 39, 53, 119, 224, and 379 against ground-truth kinematic tolerances.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
 
 #### Ticket 4.1: Evaluation Engine Core, Runtime Node Graph & Deform Tier Pipeline
 * **Target:** `PmxEvaluator` (`src/evaluator/PmxRuntimeScene.h/.cpp`, `CMakeLists.txt`, `tests/tst_pmx_evaluator.cpp`)

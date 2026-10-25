@@ -81,6 +81,7 @@ private slots:
     void testVmdMalformedBufferRejection();
     void testDiagnoseUserVmdMotion();
     void testDynamicRigidBodiesAlignToAnimatedBones();
+    void testAnimationKneeFlexionAndIkLegPoses();
 };
 
 void TstPmxEvaluator::initTestCase() {
@@ -663,7 +664,7 @@ void TstPmxEvaluator::testCcdIkKneeAngleLimits() {
     legIk.ikLoopCount = 60;
     legIk.ikLimitAngle = 0.5f;
 
-    // Knee link has angle limit in Left-Handed PMX:
+    // Knee link has angle limit in canonical Left-Handed PMX:
     // MMD Knee LH: limitMin = (-3.14159, 0, 0), limitMax = (-0.005, 0, 0)
     // Converted to RH: minX = -(-0.005) = +0.005, maxX = -(-3.14159) = +3.14159, Y=0, Z=0.
     PmxIkLink linkShin;
@@ -2650,6 +2651,201 @@ void TstPmxEvaluator::testDynamicRigidBodiesAlignToAnimatedBones() {
             QVERIFY2(glm::length(bodyPos) < 50.0f,
                      qPrintable(QString("Explosion detected at step %1 for rigid body %2").arg(step).arg(item.bodyIndex)));
         }
+    }
+}
+
+void TstPmxEvaluator::testAnimationKneeFlexionAndIkLegPoses() {
+    // 1. Synthetic 2-bone leg chain test for 1-DOF hinge joint knee limits
+    {
+        PmxDocument doc;
+        PmxBone thigh;
+        thigh.nameJp = "左足";
+        thigh.parentBoneIndex = -1;
+        thigh.position = {0.0f, 2.0f, 0.0f};
+
+        PmxBone shin;
+        shin.nameJp = "左ひざ";
+        shin.parentBoneIndex = 0;
+        shin.position = {0.0f, 1.0f, 0.0f};
+
+        PmxBone ankle;
+        ankle.nameJp = "左足首";
+        ankle.parentBoneIndex = 1;
+        ankle.position = {0.0f, 0.0f, 0.0f};
+
+        PmxBone legIk;
+        legIk.nameJp = "左足ＩＫ";
+        legIk.parentBoneIndex = -1;
+        legIk.position = {0.0f, 0.0f, 0.0f};
+        legIk.boneFlags = 0x0020;
+        legIk.ikTargetBoneIndex = 2;
+        legIk.ikLoopCount = 60;
+        legIk.ikLimitAngle = 0.5f;
+
+        // 1-DOF X-only hinge knee link with canonical Left-Handed PMX limits
+        PmxIkLink linkShin;
+        linkShin.boneIndex = 1;
+        linkShin.hasAngleLimit = 1;
+        linkShin.limitMin = glm::vec3(-3.14159f, 0.0f, 0.0f);
+        linkShin.limitMax = glm::vec3(-0.005f, 0.0f, 0.0f);
+
+        PmxIkLink linkThigh;
+        linkThigh.boneIndex = 0;
+        linkThigh.hasAngleLimit = 0;
+
+        legIk.ikLinks = {linkShin, linkThigh};
+        doc.bones = {thigh, shin, ankle, legIk};
+
+        PmxRuntimeScene synthScene;
+        synthScene.loadDocument(doc);
+
+        // Move target forward (+Z in RH) and slightly up
+        synthScene.setBoneTransform(3, glm::vec3(0.0f, 0.5f, 0.5f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+        synthScene.evaluate();
+
+        glm::vec3 kneeEuler = MmdCcdIkSolver::quatToZxyEuler(synthScene.bone(1).ikRotation);
+        QVERIFY2(kneeEuler.x >= 0.005f,
+                 qPrintable(QString("Synthetic knee flexion X %1 < 0.005 rad").arg(kneeEuler.x)));
+        QVERIFY2(std::abs(kneeEuler.y) < 1e-4f,
+                 qPrintable(QString("Synthetic knee non-zero Y %1").arg(kneeEuler.y)));
+        QVERIFY2(std::abs(kneeEuler.z) < 1e-4f,
+                 qPrintable(QString("Synthetic knee non-zero Z %1").arg(kneeEuler.z)));
+
+        glm::vec3 effectorPos = synthScene.worldPosition(2);
+        glm::vec3 targetPos = synthScene.worldPosition(3);
+        QVERIFY2(glm::distance(effectorPos, targetPos) < 1e-3f, "Synthetic ankle did not reach IK target");
+    }
+
+    // 2. Live Barbara.pmx + Motion 1.vmd test
+    const QString pmxPath = QStringLiteral("/home/oscarc/Documents/3D Objects/Barbara/Barbara.pmx");
+    const QString vmdPath = QStringLiteral("/home/oscarc/Documents/3D Objects/PHODI PHODI by MizukiC/Motion 1.vmd");
+
+    if (!QFile::exists(pmxPath) || !QFile::exists(vmdPath)) {
+        qDebug() << "Skipping live animation check: Barbara.pmx or Motion 1.vmd not found.";
+        return;
+    }
+
+    PmxDocument pmxDoc;
+    QString pmxErr;
+    QVERIFY2(PmxReader::readFromFile(pmxPath, pmxDoc, &pmxErr), qPrintable(pmxErr));
+
+    QString vmdErr;
+    auto motionOpt = VmdImporter::loadFromFile(vmdPath, &vmdErr);
+    QVERIFY2(motionOpt.has_value(), qPrintable(vmdErr));
+    const auto& motion = *motionOpt;
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(pmxDoc);
+
+    auto findBone = [&](const QString& n1, const QString& n2) -> int {
+        int idx = scene.findBoneByName(n1);
+        if (idx < 0) idx = scene.findBoneByName(n2);
+        return idx;
+    };
+
+    int kneeL = findBone(QString::fromUtf8("左ひざ"), QStringLiteral("ひざ.L"));
+    int kneeR = findBone(QString::fromUtf8("右ひざ"), QStringLiteral("ひざ.R"));
+    int ankleL = findBone(QString::fromUtf8("左足首"), QStringLiteral("足首.L"));
+    int ankleR = findBone(QString::fromUtf8("右足首"), QStringLiteral("足首.R"));
+    int ikL = findBone(QString::fromUtf8("左足ＩＫ"), QStringLiteral("足ＩＫ.L"));
+    int ikR = findBone(QString::fromUtf8("右足ＩＫ"), QStringLiteral("足ＩＫ.R"));
+    int thighL = findBone(QString::fromUtf8("左足"), QStringLiteral("足.L"));
+    int thighR = findBone(QString::fromUtf8("右足"), QStringLiteral("足.R"));
+
+    QVERIFY2(kneeL >= 0, "Left knee bone not found in Barbara");
+    QVERIFY2(kneeR >= 0, "Right knee bone not found in Barbara");
+    QVERIFY2(ankleL >= 0, "Left ankle bone not found in Barbara");
+    QVERIFY2(ankleR >= 0, "Right ankle bone not found in Barbara");
+    QVERIFY2(ikL >= 0, "Left foot IK bone not found in Barbara");
+    QVERIFY2(ikR >= 0, "Right foot IK bone not found in Barbara");
+    QVERIFY2(thighL >= 0, "Left thigh bone not found in Barbara");
+    QVERIFY2(thighR >= 0, "Right thigh bone not found in Barbara");
+
+    for (const auto& l : pmxDoc.bones[ikL].ikLinks) {
+        qDebug() << "Left Foot IK Link bone:" << pmxDoc.bones[l.boneIndex].nameJp
+                 << "hasLimit:" << l.hasAngleLimit
+                 << "limitMin:" << l.limitMin.x << l.limitMin.y << l.limitMin.z
+                 << "limitMax:" << l.limitMax.x << l.limitMax.y << l.limitMax.z;
+    }
+
+    PmxAnimationPlayer player;
+    player.loadMotion(motion);
+
+    const std::vector<float> testFrames = {39.0f, 53.0f, 119.0f, 224.0f, 379.0f};
+
+    for (float frame : testFrames) {
+        player.setFrame(frame);
+        player.applyToScene(scene);
+        scene.evaluate(0.0f);
+
+        glm::vec3 eulerKneeL = MmdCcdIkSolver::quatToZxyEuler(scene.bone(kneeL).ikRotation);
+        glm::vec3 eulerKneeR = MmdCcdIkSolver::quatToZxyEuler(scene.bone(kneeR).ikRotation);
+        glm::vec3 posAnkleL = scene.worldPosition(ankleL);
+        glm::vec3 posIkL = scene.worldPosition(ikL);
+        float ankleIkDistL = glm::distance(posAnkleL, posIkL);
+
+        glm::vec3 eulerThighL = MmdCcdIkSolver::quatToZxyEuler(scene.bone(thighL).userRotation * scene.bone(thighL).ikRotation);
+        glm::vec3 thighDirL = glm::normalize(scene.worldPosition(kneeL) - scene.worldPosition(thighL));
+
+        qDebug().noquote() << QStringLiteral("[Frame %1] KneeL_X: %2 rad (%3 deg), KneeR_X: %4 rad (%5 deg), AnkleL-IkL dist: %6, ThighL dir: (%7, %8, %9)")
+                                  .arg(frame)
+                                  .arg(eulerKneeL.x, 0, 'f', 4)
+                                  .arg(glm::degrees(eulerKneeL.x), 0, 'f', 1)
+                                  .arg(eulerKneeR.x, 0, 'f', 4)
+                                  .arg(glm::degrees(eulerKneeR.x), 0, 'f', 1)
+                                  .arg(ankleIkDistL, 0, 'f', 4)
+                                  .arg(thighDirL.x, 0, 'f', 3)
+                                  .arg(thighDirL.y, 0, 'f', 3)
+                                  .arg(thighDirL.z, 0, 'f', 3);
+
+        if (std::abs(frame - 39.0f) < 1e-3f) {
+            // At frame 39: positive flexion > 0.35 rad (approx +20 deg to +50 deg)
+            QVERIFY2(eulerKneeL.x > 0.35f,
+                     qPrintable(QString("Frame 39 Left Knee flexion %1 rad (%2 deg) <= 0.35 rad")
+                                    .arg(eulerKneeL.x).arg(glm::degrees(eulerKneeL.x))));
+            QVERIFY2(ankleIkDistL < 0.2f,
+                     qPrintable(QString("Frame 39 AnkleL to IkL distance %1 >= 0.2").arg(ankleIkDistL)));
+            // Thigh bone must point mostly downwards (Y < -0.5), not flipped 90 degrees outward into the air
+            QVERIFY2(thighDirL.y < -0.5f,
+                     qPrintable(QString("Frame 39 ThighL flipped outward: dir.y = %1").arg(thighDirL.y)));
+        } else if (std::abs(frame - 53.0f) < 1e-3f) {
+            QVERIFY2(eulerKneeL.x > 0.2f, "Frame 53 Left Knee should flex forward");
+            QVERIFY2(eulerKneeR.x > 0.35f, "Frame 53 Right Knee should flex forward");
+            QVERIFY2(ankleIkDistL < 0.2f, "Frame 53 AnkleL should track IkL");
+            QVERIFY2(thighDirL.y < -0.5f, "Frame 53 ThighL should point downward");
+        } else if (std::abs(frame - 119.0f) < 1e-3f) {
+            QVERIFY2(eulerKneeL.x >= 0.0f, "Frame 119 Left Knee should not hyperextend");
+            QVERIFY2(thighDirL.y < -0.5f, "Frame 119 ThighL should point downward");
+        } else if (std::abs(frame - 224.0f) < 1e-3f) {
+            QVERIFY2(eulerKneeL.x > 1.0f, "Frame 224 Left Knee should flex high");
+            QVERIFY2(ankleIkDistL < 0.3f, "Frame 224 AnkleL should track IkL");
+        } else if (std::abs(frame - 379.0f) < 1e-3f) {
+            QVERIFY2(eulerKneeL.x > 0.35f, "Frame 379 Left Knee should flex");
+            QVERIFY2(eulerKneeR.x > 0.35f, "Frame 379 Right Knee should flex");
+        }
+
+        // General invariants across all test frames (39, 53, 119, 224, 379):
+        // Knee flexion must never be negative (no hyperextension / backwards bending)
+        QVERIFY2(eulerKneeL.x >= 0.0f,
+                 qPrintable(QString("Frame %1 Left knee hyperextended: %2").arg(frame).arg(eulerKneeL.x)));
+        QVERIFY2(eulerKneeR.x >= 0.0f,
+                 qPrintable(QString("Frame %1 Right knee hyperextended: %2").arg(frame).arg(eulerKneeR.x)));
+
+        // Knee 1-DOF hinge invariant: Y and Z angles must remain 0
+        QVERIFY2(std::abs(eulerKneeL.y) < 1e-3f && std::abs(eulerKneeL.z) < 1e-3f,
+                 qPrintable(QString("Frame %1 Left knee non-zero Y/Z: (%2, %3)")
+                                .arg(frame).arg(eulerKneeL.y).arg(eulerKneeL.z)));
+        QVERIFY2(std::abs(eulerKneeR.y) < 1e-3f && std::abs(eulerKneeR.z) < 1e-3f,
+                 qPrintable(QString("Frame %1 Right knee non-zero Y/Z: (%2, %3)")
+                                .arg(frame).arg(eulerKneeR.y).arg(eulerKneeR.z)));
+
+        glm::vec3 posThighL = scene.worldPosition(thighL);
+        glm::vec3 posKneeL = scene.worldPosition(kneeL);
+        qDebug().noquote() << QStringLiteral("       ThighL pos: (%1, %2, %3), KneeL pos: (%4, %5, %6), AnkleL pos: (%7, %8, %9), IkL pos: (%10, %11, %12)")
+                                  .arg(posThighL.x, 0, 'f', 2).arg(posThighL.y, 0, 'f', 2).arg(posThighL.z, 0, 'f', 2)
+                                  .arg(posKneeL.x, 0, 'f', 2).arg(posKneeL.y, 0, 'f', 2).arg(posKneeL.z, 0, 'f', 2)
+                                  .arg(posAnkleL.x, 0, 'f', 2).arg(posAnkleL.y, 0, 'f', 2).arg(posAnkleL.z, 0, 'f', 2)
+                                  .arg(posIkL.x, 0, 'f', 2).arg(posIkL.y, 0, 'f', 2).arg(posIkL.z, 0, 'f', 2);
     }
 }
 
