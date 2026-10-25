@@ -8,11 +8,11 @@
 ## 1. Project Status Overview
 * **Project Name:** ZenPMX (Native Linux PMX Editor)
 * **GitHub Repository:** [`https://github.com/covarianttensor/ZenPMX`](https://github.com/covarianttensor/ZenPMX) (Public)
-* **Active Phase:** Milestone 1 & 2 Completed (`v0.1.0-milestone1`, `v0.2.0-milestone2` pushed to GitHub)
-* **Next Target:** Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode)
-* **Overall Completion Level:** 50%
-* **Current Working Tree:** Clean (`main` branch commit `c87c34f`)
-* **Test Suite Status:** 7/7 CTest suites passing (107 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.32s)
+* **Active Phase:** Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode)
+* **Next Target:** Ticket 3.2 (Inverted-Hull Edge Outline Pass with Per-Vertex/Per-Material Width Scaling)
+* **Overall Completion Level:** 55%
+* **Current Working Tree:** Clean (`main` branch commit `2ab3af4`)
+* **Test Suite Status:** 7/7 CTest suites passing (111 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.45s)
 
 ---
 
@@ -38,6 +38,12 @@
 | 2026-10-24 23:45 | **Ticket-2.3** | Core / Serialization (`PmxCore`) | `pmx_core_engineer` | `6de48c9` | 5/5 CTest (14/14 QtTest) | ~35k | Legacy PMD 1.0 binary importer, Shift-JIS decoding, BDEF2 weights, texture/sphere split, English/physics extensions. |
 | 2026-10-25 00:38 | **Ticket-2.4** | Core / Models (`PmxCore` / `PmxModels`) | `pmx_core_engineer` | `44caf36` | 6/6 CTest (15/15 QtTest) | ~35k | Kitbash merger engine, 7-entity index remapping, standard bone deduplication, PMX 2.1 elevation, undoable controller integration. |
 | 2026-10-25 01:10 | **Ticket-2.5** | Core / Importer (`PmxCore`) | `pmx_core_engineer` | `c87c34f` | 7/7 CTest (12/12 QtTest) | ~34k | Assimp accessory importer, OBJ/FBX/glTF, LH coordinates, BDEF1 root bone, materials/textures, QA hardened. |
+
+### Milestone 3: Full MMD Shader Pipeline & Interactive 3D Edit Mode (In Progress)
+
+| Date / UTC | Ticket ID | Subsystem Target | Subagent | Commit | Test Status | Token Burn | Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
+| 2026-10-25 01:43 | **Ticket-3.1** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | `2ab3af4` | 7/7 CTest (19/19 QtTest) | ~42k | MMD toon ramp shading, vertical V sampling, .sph/.spa sphere maps, PmxTextureCache, clamp samplers. (Strike 1 resolved). |
 
 ---
 
@@ -116,6 +122,21 @@
   - Added full null guards across all Assimp mesh and material properties.
   - Added `testTextureImport()` and `testMultiMeshImport()` test cases.
   - Full suite passed 100% cleanly under ASan/UBSan; committed at `c87c34f`.
+
+### Incident 6: Ticket 3.1 Sampler Inversion, Toon Orientation & Shared Index Collision (Strike 1)
+* **Date:** 2026-10-25 01:33 UTC
+* **Subsystem:** `PmxViewport` (`src/viewport/shaders/mesh.frag`, `PmxTextureCache.cpp`)
+* **Root Cause:**
+  1. Binding inversion: Binding 2 was sphere and Binding 3 was toon, deviating from MASTER_SPECIFICATION.md §6.2.
+  2. Horizontal vs Vertical toon sampling: toon textures are vertical strips sampled along V; horizontal sampling caused flat constant shading across lighting angles.
+  3. Shared toon index off-by-one (`idx = idx - 1`) caused collisions for preset 0 and 1, making preset 9 unreachable.
+  4. Unnormalized view normals in `mesh.vert` and missing backface normal inversion for double-sided materials.
+* **Corrective Action:**
+  - QA adversary detected all defects and issued Strike 1 rejection.
+  - `pmx_ui_engineer` remediated all 6 items: synchronized bindings (1=Diffuse, 2=Toon, 3=Sphere), sampled toon vertically at `vec2(0.5, toonV)`, direct mapped `0..9` to presets `0..9`, normalized view normals, inverted backface normals (`if (!gl_FrontFacing) N = -N;`), and applied `QRhiSampler::ClampToEdge`.
+  - Non-hollow unit tests added in `tst_pmx_viewport.cpp`.
+  - QA Re-Audit PASSED; committed at `2ab3af4`.
+
 
 ---
 

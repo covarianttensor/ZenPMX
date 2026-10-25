@@ -9,7 +9,7 @@
 
 ```text
 ================================================================================
-[████████████████████░░░░░░░░░░░░░░░░░░░░] 50% COMPLETE
+[██████████████████████░░░░░░░░░░░░░░░░░░] 55% COMPLETE
 ================================================================================
 Project: ZenPMX (Native Linux PMX Editor)
 Repository: https://github.com/covarianttensor/ZenPMX (Public)
@@ -25,7 +25,7 @@ Active Phase: Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode)
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | **Milestone 1** | **The Tracer Bullet (End-to-End Pipeline)** | 5 | `[DONE]` | **PASS** | `v0.1.0-milestone1` |
 | **Milestone 2** | **Complete 8-Tab Spreadsheet Inspector & Kitbash Merger** | 5 | `[DONE]` | **PASS** | `v0.2.0-milestone2` |
-| **Milestone 3** | **Full MMD Shader Pipeline & Interactive 3D Edit Mode** | 5 | `[TODO]` | Pending | `v0.3.0-milestone3` |
+| **Milestone 3** | **Full MMD Shader Pipeline & Interactive 3D Edit Mode** | 5 | `[IN_PROGRESS]` | Pending | `v0.3.0-milestone3` |
 | **Milestone 4** | **Live TransformView (CCDIK, SDEF & Bullet3 Physics)** | 5 | `[TODO]` | Pending | `v0.4.0-milestone4` |
 | **Milestone 5** | **The Top 8 Native C++ Community Power Tools** | 5 | `[TODO]` | Pending | `v0.5.0-milestone5` |
 | **Milestone 6** | **External Mono PEPlugin Host & Full MCP Co-Pilot** | 4 | `[TODO]` | Pending | `v1.0.0` |
@@ -93,7 +93,7 @@ Transform the viewport from a flat diffuse renderer into a production-grade MMD 
 
 | Ticket ID | Title | Target Subsystem | Assigned Subagent | Status | Dependencies | Commit |
 | :--- | :--- | :--- | :--- | :---: | :--- | :---: |
-| **Ticket 3.1** | **MMD Toon Ramp Shading & Sphere Map (`.sph` / `.spa`) Multi-Pass QRhi Pipeline** | `PmxViewport` | `pmx_ui_engineer` | `[TODO]` | Ticket 2.5 |
+| **Ticket 3.1** | **MMD Toon Ramp Shading & Sphere Map (`.sph` / `.spa`) Multi-Pass QRhi Pipeline** | `PmxViewport` | `pmx_ui_engineer` | `[DONE]` | Ticket 2.5 | `2ab3af4` |
 | **Ticket 3.2** | **Inverted-Hull Edge Outline Pass with Per-Vertex/Per-Material Width Scaling** | `PmxViewport` | `pmx_ui_engineer` | `[TODO]` | Ticket 3.1 |
 | **Ticket 3.3** | **Interactive 3D Transform Gizmos (Translate/Rotate/Scale) & Symmetric Editing** | `PmxViewport` / `PmxModels` | `pmx_ui_engineer` | `[TODO]` | Ticket 3.2 |
 | **Ticket 3.4** | **Wireframe Visualizers for Bones, Rigid Bodies (Sphere/Box/Capsule) & 6DoF Joints** | `PmxViewport` | `pmx_ui_engineer` | `[TODO]` | Ticket 3.3 |

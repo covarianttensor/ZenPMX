@@ -272,3 +272,70 @@
     2. Test Coverage: Added `testTextureImport()` verifying Windows backslash normalization and texture deduplication, and `testMultiMeshImport()` verifying vertex offsets and multi-object partitioning.
     3. Defensive Null Safety: Hardened against null pointers in corrupt Assimp mesh buffers (`mMeshes`, `mVertices`, `mNormals`, `mFaces`, `mMaterials`).
 
+---
+
+## Milestone 3: Full MMD Shader Pipeline & Interactive 3D Edit Mode
+
+### Ticket 3.1: MMD Toon Ramp Shading & Sphere Map (`.sph` / `.spa`) Multi-Pass QRhi Pipeline
+* **Assigned Subagent:** `pmx_ui_engineer`
+* **Target Subsystem:** `PmxViewport` (Target 4)
+* **Date Issued:** 2026-10-25 01:15 UTC
+* **Status:** `[DONE]` (Committed at `2ab3af4`)
+* **Specification:**
+  - Shader Pipeline Updates (`src/viewport/shaders/mesh.vert`, `src/viewport/shaders/mesh.frag`):
+    - In `mesh.vert`:
+      - Compute view-space normal `vNormalView = mat3(u_normalMatrix) * inNormal;`.
+      - Compute MMD sphere map texture coordinates:
+        `vSphereUV = vec2(0.5 + 0.5 * vNormalView.x, 0.5 - 0.5 * vNormalView.y);`.
+      - Pass `vNormal`, `vUV`, `vSphereUV`, `vViewPos` to fragment shader.
+    - In `mesh.frag`:
+      - Add samplers:
+        `layout(binding = 1) uniform sampler2D u_diffuseTex;`
+        `layout(binding = 2) uniform sampler2D u_sphereTex;`
+        `layout(binding = 3) uniform sampler2D u_toonTex;`
+      - Evaluate Diffuse Color:
+        Sample `u_diffuseTex` at `vUV`. Apply material `u_diffuse` color & alpha.
+      - Evaluate MMD Toon Ramp:
+        Directional light dot $N \cdot L = \text{dot}(N, L)$.
+        Toon coordinate: $u = \text{clamp}(0.5 - 0.5 \times (N \cdot L), 0.0, 1.0)$.
+        Sample `u_toonTex` at `vec2(u, 0.5)` to obtain toon shading ramp factor.
+      - Evaluate Sphere Map:
+        Sample `u_sphereTex` at `vSphereUV`.
+        If `sphereMode == 1` (Multiplication / `.sph`): multiply base color by sphere RGB.
+        If `sphereMode == 2` (Addition / `.spa`): add sphere RGB to base color.
+        If `sphereMode == 0` (None) or 3 (SubTexture): bypass sphere effect.
+      - Evaluate Specular:
+        Blinn-Phong specular based on half-vector $H = \text{normalize}(L + V)$.
+      - Final composite color with alpha blending and premultiplied / standard output.
+  - Viewport Renderer & Texture Cache (`src/viewport/PmxTextureCache.h/.cpp`, `src/viewport/PmxViewportItem.cpp`):
+    - Implement `PmxTextureCache`:
+      - Manages `QRhiTexture` and `QRhiSampler` allocations.
+      - Generates default 1x1 white texture for missing/untextured materials.
+      - Generates embedded fallback 1D toon ramps (`toon01.bmp`..`toon10.bmp`) programmatically (smooth steps / color transitions) when external files are absent.
+      - Loads model textures (`.png`, `.jpg`, `.bmp`, `.tga`) from disk using `QImage`.
+    - Per-Material Draw Call Batching:
+      - In `PmxRhiRenderer::render`, iterate over `doc.materials`.
+      - Allocate / bind per-material `QRhiShaderResourceBindings` (SRB) binding uniform buffer, diffuse texture, sphere texture, and toon texture.
+      - Support double-sided rendering (`QRhiGraphicsPipeline::CullNone` if `mat.drawFlags & 0x01`, otherwise `CullBack`).
+      - Call `cb->drawIndexed(mat.faceVertexCount, 1, indexOffset, 0);`
+      - Increment `indexOffset += mat.faceVertexCount;`.
+  - Verification & Tests (`tests/tst_pmx_viewport.cpp`):
+    - Add tests for:
+      - Sphere map coordinate generation math.
+      - Toon ramp lookup calculations.
+      - Texture cache fallbacks (1x1 white, 10 embedded toon ramps).
+      - Material submesh draw range partitioning without index overflow.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+#### Ticket 3.1 — Revision 2 (Strike 1 Remediation & Alignment)
+* **Date & Timestamp:** 2026-10-25 01:40 UTC
+* **Reason for Revision:**
+  - Strike 1 audit failure detected by `pmx_qa_adversary`:
+    1. Spec Deviation: Inverted sampler bindings (Binding 2 was sphere, Binding 3 was toon). Corrected to Binding 2 = Toon (`u_toonTex`), Binding 3 = Sphere (`u_sphereTex`).
+    2. Toon Ramp Orientation: Toon ramp was sampled horizontally along U instead of vertically along V. Standard MMD textures are vertical strips. Fixed to sample along V at `vec2(0.5, toonV)`.
+    3. Shared Toon Index Collision: `idx = idx - 1` caused preset 0 and 1 collision and made preset 9 unreachable. Removed offset; directly mapped `0..9` to presets `0..9`.
+    4. View Normal Normalization: Normalized view-space normal before computing sphere UVs in `mesh.vert`.
+    5. Backface Normal Inversion: Added `if (!gl_FrontFacing) N = -N;` in `mesh.frag` for double-sided materials.
+    6. Sampler Address Mode: Applied `QRhiSampler::ClampToEdge` for toon and sphere textures to prevent seam bleeding.
+
+
