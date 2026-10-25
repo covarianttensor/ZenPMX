@@ -80,6 +80,7 @@ private slots:
     void testAnimationPlayerNanHandling();
     void testVmdMalformedBufferRejection();
     void testDiagnoseUserVmdMotion();
+    void testDynamicRigidBodiesAlignToAnimatedBones();
 };
 
 void TstPmxEvaluator::initTestCase() {
@@ -2525,6 +2526,131 @@ void TstPmxEvaluator::testDiagnoseUserVmdMotion() {
     qDebug().noquote() << "  Player current frame after 1 update (dt=1/30):" << player.currentFrame();
 
     qDebug().noquote() << "========================================================\n";
+}
+
+void TstPmxEvaluator::testDynamicRigidBodiesAlignToAnimatedBones() {
+    const QString vmdPath = QStringLiteral("/home/oscarc/Documents/3D Objects/PHODI PHODI by MizukiC/Motion 1.vmd");
+    const QString pmxPath = QStringLiteral("/home/oscarc/Documents/3D Objects/Barbara/Barbara.pmx");
+
+    if (!QFile::exists(vmdPath) || !QFile::exists(pmxPath)) {
+        QSKIP("Barbara.pmx or Motion 1.vmd not found on system");
+    }
+
+    PmxDocument pmxDoc;
+    QString pmxErr;
+    QVERIFY2(PmxReader::readFromFile(pmxPath, pmxDoc, &pmxErr), qPrintable(pmxErr));
+
+    QString vmdErr;
+    auto motionOpt = VmdImporter::loadFromFile(vmdPath, &vmdErr);
+    QVERIFY2(motionOpt.has_value(), qPrintable(vmdErr));
+    const auto& motion = *motionOpt;
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(pmxDoc);
+    scene.setPhysicsEnabled(true);
+
+    // Track dynamic rigid bodies (physicsMode 1 or 2)
+    struct DynamicBodyInfo {
+        int bodyIndex;
+        int boneIndex;
+        int parentBoneIndex;
+        uint8_t physicsMode;
+        glm::vec3 restBonePos;
+    };
+    std::vector<DynamicBodyInfo> dynamicBodies;
+
+    for (size_t i = 0; i < pmxDoc.rigidBodies.size(); ++i) {
+        const auto& rb = pmxDoc.rigidBodies[i];
+        if ((rb.physicsMode == 1 || rb.physicsMode == 2) &&
+            rb.boneIndex >= 0 && rb.boneIndex < static_cast<int>(pmxDoc.bones.size())) {
+            DynamicBodyInfo info;
+            info.bodyIndex = static_cast<int>(i);
+            info.boneIndex = rb.boneIndex;
+            info.parentBoneIndex = pmxDoc.bones[static_cast<size_t>(rb.boneIndex)].parentBoneIndex;
+            info.physicsMode = rb.physicsMode;
+            info.restBonePos = scene.worldPosition(rb.boneIndex);
+            dynamicBodies.push_back(info);
+        }
+    }
+    QVERIFY(!dynamicBodies.empty());
+
+    // Apply frame 0 of motion
+    PmxAnimationPlayer player;
+    player.loadMotion(motion);
+    player.setFrame(0.0f);
+    player.applyToScene(scene);
+
+    // Evaluate static pose at frame 0 (deltaTime = 0.0f)
+    scene.evaluate(0.0f);
+
+    // 1. Verify dynamic bones did not stay at rest/origin when parents moved,
+    // and rigid bodies are aligned to boneWorld * boneToBodyOffset.
+    int parentMovedCount = 0;
+    int alignedBodyCount = 0;
+
+    for (const auto& item : dynamicBodies) {
+        glm::vec3 curBonePos = scene.worldPosition(item.boneIndex);
+        QVERIFY(!std::isnan(curBonePos.x) && !std::isnan(curBonePos.y) && !std::isnan(curBonePos.z));
+        QVERIFY(!std::isinf(curBonePos.x) && !std::isinf(curBonePos.y) && !std::isinf(curBonePos.z));
+
+        if (item.parentBoneIndex >= 0 && item.parentBoneIndex < static_cast<int>(pmxDoc.bones.size())) {
+            glm::vec3 parentCurPos = scene.worldPosition(item.parentBoneIndex);
+            glm::vec3 parentRestPos = PmxRuntimeScene::toRightHanded(pmxDoc.bones[static_cast<size_t>(item.parentBoneIndex)].position);
+            if (glm::distance(parentCurPos, parentRestPos) > 0.5f) {
+                // Parent bone moved by > 0.5m. Dynamic bone must follow and not be stuck at rest position.
+                float distFromRest = glm::distance(curBonePos, item.restBonePos);
+                QVERIFY2(distFromRest > 0.1f,
+                         qPrintable(QString("Bone %1 (index %2) remained stuck at rest (%3, %4, %5) despite parent moving!")
+                                        .arg(pmxDoc.bones[static_cast<size_t>(item.boneIndex)].nameJp)
+                                        .arg(item.boneIndex)
+                                        .arg(curBonePos.x).arg(curBonePos.y).arg(curBonePos.z)));
+                parentMovedCount++;
+            }
+        }
+
+        // Rigid body world transform in Bullet must match scene.worldMatrix(meta.boneIndex) * meta.boneToBodyOffset
+        glm::vec3 curBodyPos = scene.physicsEngine()->rigidBodyPosition(item.bodyIndex);
+        QVERIFY(!std::isnan(curBodyPos.x) && !std::isnan(curBodyPos.y) && !std::isnan(curBodyPos.z));
+
+        const auto* meta = scene.physicsEngine()->runtimeRigidBody(item.bodyIndex);
+        QVERIFY(meta != nullptr);
+        glm::mat4 expectedBodyWorld = scene.worldMatrix(item.boneIndex) * meta->boneToBodyOffset;
+        glm::vec3 expectedBodyPos = glm::vec3(expectedBodyWorld[3]);
+        QVERIFY2(glm::distance(curBodyPos, expectedBodyPos) < 1e-3f,
+                 qPrintable(QString("Dynamic rigid body %1 position (%2, %3, %4) does not match bone transform (%5, %6, %7)")
+                                .arg(item.bodyIndex)
+                                .arg(curBodyPos.x).arg(curBodyPos.y).arg(curBodyPos.z)
+                                .arg(expectedBodyPos.x).arg(expectedBodyPos.y).arg(expectedBodyPos.z)));
+        alignedBodyCount++;
+    }
+
+    QVERIFY(parentMovedCount > 0);
+    QCOMPARE(alignedBodyCount, static_cast<int>(dynamicBodies.size()));
+
+    // 2. Step simulation with delta (e.g. deltaTime = 1.0f / 30.0f) and verify stable stepping
+    for (int step = 1; step <= 30; ++step) {
+        player.setFrame(static_cast<float>(step));
+        player.applyToScene(scene);
+        scene.evaluate(1.0f / 30.0f);
+
+        for (const auto& item : dynamicBodies) {
+            glm::vec3 bonePos = scene.worldPosition(item.boneIndex);
+            QVERIFY(!std::isnan(bonePos.x) && !std::isnan(bonePos.y) && !std::isnan(bonePos.z));
+            QVERIFY(!std::isinf(bonePos.x) && !std::isinf(bonePos.y) && !std::isinf(bonePos.z));
+            // Sanity check: no physics explosion (e.g. bones flying off to infinity)
+            QVERIFY2(glm::length(bonePos) < 50.0f,
+                     qPrintable(QString("Explosion detected at step %1 for bone %2: pos=(%3, %4, %5)")
+                                    .arg(step)
+                                    .arg(pmxDoc.bones[static_cast<size_t>(item.boneIndex)].nameJp)
+                                    .arg(bonePos.x).arg(bonePos.y).arg(bonePos.z)));
+
+            glm::vec3 bodyPos = scene.physicsEngine()->rigidBodyPosition(item.bodyIndex);
+            QVERIFY(!std::isnan(bodyPos.x) && !std::isnan(bodyPos.y) && !std::isnan(bodyPos.z));
+            QVERIFY(!std::isinf(bodyPos.x) && !std::isinf(bodyPos.y) && !std::isinf(bodyPos.z));
+            QVERIFY2(glm::length(bodyPos) < 50.0f,
+                     qPrintable(QString("Explosion detected at step %1 for rigid body %2").arg(step).arg(item.bodyIndex)));
+        }
+    }
 }
 
 QTEST_MAIN(TstPmxEvaluator)

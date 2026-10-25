@@ -849,5 +849,95 @@
 * **Adversarial QA Re-Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 17:56 UTC).
 * **DevOps Commit Receipt:** Committed at `7c0ce9a` with 8/8 test suites passing in 1.68s under ASan/UBSan; tagged `v0.4.0-milestone4`.
 
+---
+
+### Ticket 4.7: Core Evaluator Physics Alignment to Animated Bones
+* **Assigned Subagent:** `pmx_core_systems_engineer`
+* **Target Subsystem:** `PmxEvaluator` (`src/evaluator/PmxPhysicsEngine.h/.cpp`, `src/evaluator/PmxRuntimeScene.h/.cpp`, `tests/tst_pmx_evaluator.cpp`)
+* **Date Issued:** 2026-10-25 19:30 UTC
+* **Status:** `[IN_PROGRESS]`
+* **Specification & Architectural Invariants:**
+  1. **Dynamic Rigid Body Alignment to Animated Bones (`PmxPhysicsEngine.h/.cpp`, `PmxRuntimeScene.h/.cpp`):**
+     - Add `void resetToBoneTransforms(PmxRuntimeScene& scene)` to `PmxPhysicsEngine`.
+       - For all rigid bodies (`i = 0 .. m_rigidBodies.size() - 1`):
+         If `meta.boneIndex >= 0 && meta.boneIndex < scene.boneCount()`:
+         Calculate world transform of the body from the bone:
+         `glm::mat4 boneWorld = scene.worldMatrix(meta.boneIndex);`
+         `glm::mat4 bodyWorld = boneWorld * meta.boneToBodyOffset;`
+         `btTransform trans = glmToBtTransform(bodyWorld);`
+         `auto* body = m_rigidBodies[i].get();`
+         `body->setWorldTransform(trans);`
+         `if (body->getMotionState()) body->getMotionState()->setWorldTransform(trans);`
+         `body->setLinearVelocity(btVector3(0.0f, 0.0f, 0.0f));`
+         `body->setAngularVelocity(btVector3(0.0f, 0.0f, 0.0f));`
+         `body->clearForces();`
+         `if (meta.physicsMode >= 1) body->activate(true);`
+     - In `PmxRuntimeScene`:
+       - Add `void resetPhysicsToBones()` that calls `m_physicsEngine->resetToBoneTransforms(*this)`.
+       - In `loadDocument()`: Call `evaluateBones()` (both pre-physics and post-physics bones) and then call `resetPhysicsToBones()` so dynamic bodies start on their parent bones rather than at origin rest positions.
+       - In `resetPhysics()` and `resetTransforms()`: Call `resetPhysicsToBones()`.
+       - In `evaluate(float deltaTime)`:
+         When `deltaTime <= 0.0f` and `m_physicsEnabled && m_physicsEngine`:
+         Call `m_physicsEngine->resetToBoneTransforms(*this)` so that static poses, scrubbing frames, and loading motions synchronize dynamic rigid bodies to current bone positions, preventing `syncDynamicBones` from pulling dynamic skirt/hair bones to obsolete origin coordinates.
+       - In `evaluatePrePhysicsBones()` and `evaluatePostPhysicsBones()`:
+         When `m_physicsEnabled == false`, ensure all bones evaluate FK so turning off physics keeps clothes/hair attached to the body.
+  2. **Verification Suite (`tests/tst_pmx_evaluator.cpp`):**
+     - Add `testDynamicRigidBodiesAlignToAnimatedBones`: Load `Barbara.pmx`, enable physics, apply `Motion 1.vmd` frame 0; verify that skirt bones and skirt rigid bodies move with the hips and legs (e.g. $X \neq 0$, distance to origin $> 1.0$), eliminating the "de-pantsed" detachment glitch.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
+
+---
+
+### Ticket 4.8: TransformView Viewport Playback, Dynamic VBO & TimelineBar Hardening
+* **Assigned Subagent:** `pmx_ui_engineer`
+* **Target Subsystems:** `PmxViewport` & `pmx-editor` (`src/viewport/PmxViewportItem.h/.cpp`, `src/app/qml/TimelineBar.qml`, `tests/tst_pmx_viewport.cpp`)
+* **Date Issued:** 2026-10-25 19:30 UTC
+* **Status:** `[TODO]`
+* **Specification & Architectural Invariants:**
+  1. **Dynamic VBO & Playback Timer Hardening (`PmxViewportItem.h/.cpp`):**
+     - In `PmxRhiRenderer::render`: Allocate `m_meshVertexBuffer` with `QRhiBuffer::Dynamic` instead of `QRhiBuffer::Immutable`.
+     - In `loadVmdMotion`, `loadVpdPose`, `setCurrentFrame`, `resetPose`, `resetPhysics`: Call `m_runtimeScene.resetPhysicsToBones()`.
+     - In `play()`: Ensure `m_runtimeRevision++` is incremented, timer started, and `currentFrame` updates emitted.
+     - In `onPlaybackTick()`: Ensure `m_animationPlayer.update(deltaTime)` advances `m_currentFrame`, calls `m_runtimeScene.evaluate(deltaTime)`, updates `m_runtimeRevision++`, and emits `currentFrameChanged()`.
+  2. **TimelineBar QML Hardening (`TimelineBar.qml`):**
+     - Type `viewportItem` cleanly as `property QtObject viewportItem: null`.
+     - Add explicit `Connections { target: root.viewportItem; function onPlayingChanged() { ... } function onCurrentFrameChanged() { ... } }` to ensure reliable reactive UI state.
+  3. **Verification Suite (`tests/tst_pmx_viewport.cpp`):**
+     - Add `testAnimationPlaybackTimerAdvancesFrames`: Load motion, call `viewport.play()`, execute `QTest::qWait(100)`, verify that `viewport.currentFrame() > 0.0f`, `viewport.isPlaying() == true`, and `viewport.runtimeRevision()` has advanced.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+---
+
+## Milestone 5: The Top 8 Native C++ Community Power Tools
+
+### Ticket 5.1: Semi-Standard Bone Generator & Multi-Stage / Material Morph Tools
+* **Assigned Subagent:** `pmx_core_systems_engineer`
+* **Target Subsystem:** `PmxPowerTools` (`src/powertools/SemiStandardBoneGenerator.h/.cpp`, `src/powertools/BatchMorphAndBoneTools.h/.cpp`, `CMakeLists.txt`, `tests/tst_pmx_powertools.cpp`)
+* **Date Issued:** 2026-10-25 18:35 UTC
+* **Status:** `[TODO]`
+* **Specification & Architectural Invariants:**
+  1. **CMake Target Definition (`PmxPowerTools`):**
+     - Add `PmxPowerTools` static library target in `CMakeLists.txt` depending on `PmxCore`, `PmxModels`, `glm::glm`, and `Qt6::Core`.
+     - Register `tst_pmx_powertools` in CTest.
+  2. **Tool 2: Semi-Standard Bone Generator (`SemiStandardBoneGenerator.h/.cpp` — 準標準ボーン追加):**
+     - Class `SemiStandardBoneGenerator` operating on `PmxDocument` and returning undoable `PmxDocumentSnapshotCommand` via `PmxDocumentController`.
+     - Configurable helper bone options:
+       - `addMother` (`全ての親`): Root bone inserted at $(0,0,0)$ at `deformTier = 0`. Reparents root bones (`センター`, `グルーブ`, `足ＩＫ`, `つま先ＩＫ`) and adds to `Root` display frame.
+       - `addGroove` (`グルーブ`): Inserted at `センター` position as child of `センター`, reparents `上半身` and `下半身`.
+       - `addWaist` (`腰` & `腰キャンセルL/R`): Inserted between `グルーブ`/`センター` and `下半身`. `腰キャンセルL/R` uses `InheritRotation` (`weight = -1.0f`) referencing `腰` and reparenting `左足`/`右足`.
+       - `addTorso2` (`上半身2`): Splits `上半身` $\to$ `首` midpoint and splits torso vertex weights along $Y$.
+       - `addTwistBones` (`腕捩/手捩`): Computes arm/forearm vectors, inserts fixed-axis twist bones and 3 rotation-inheritance helper bones ($25\%, 50\%, 75\%$), and executes cylindrical weight projection and smooth weight splitting to prevent candy-wrapper mesh collapse.
+       - `addThumb0` (`親指０ L/R`), `addToeEx` (`足先EX L/R`), `addDBones` (`足D/ひざD/足首D`).
+  3. **Tool 7: Batch Morph & Bone Tools (`BatchMorphAndBoneTools.h/.cpp` — 多段ボーン化 / 材質モーフ一括作成):**
+     - `MultiStageBoneSplitter`: Inserts duplicate parent/child bones at the same position, updates parent-child pointers and display frame references.
+     - `MaterialMorphCreator`: 1-click generation of 28-float material morphs:
+       - `createOutfitHideMorph`: Sets `diffuse.a = 0`, `specular = 0`, `edgeColor.a = 0`, `edgeSize = 0`, `textureTint.a = 0`, `sphereTint.a = 0`, `toonTint.a = 0` (Multiply mode).
+       - `createTintMorph`: Generates Blush, Shadow, or Emission tint morphs.
+  4. **Verification Suite (`tests/tst_pmx_powertools.cpp`):**
+     - `testSemiStandardBoneInsertion`: Inserts helper bones on standard model and verifies parent-child hierarchy, deform tiers, and display frames.
+     - `testArmTwistCylindricalWeightSplitting`: Verifies arm twist insertion and weight normalization ($\sum w_i = 1.0$) across twist helper bones.
+     - `testMultiStageBoneSplitter`: Verifies duplicate bone insertion, child reparenting, and undo/redo cycle.
+     - `testMaterialMorphCreator`: Verifies 28-float material morph structure, operation types, and non-destructive properties.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_powertools`
+
 
 

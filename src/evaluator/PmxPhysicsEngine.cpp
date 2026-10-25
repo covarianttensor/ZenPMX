@@ -372,7 +372,46 @@ void PmxPhysicsEngine::syncDynamicBones(PmxRuntimeScene& scene) {
     }
 }
 
-void PmxPhysicsEngine::reset() {
+void PmxPhysicsEngine::resetToBoneTransforms(PmxRuntimeScene& scene) {
+    for (size_t i = 0; i < m_rigidBodies.size(); ++i) {
+        const auto& meta = m_bodyMetadata[i];
+        auto* body = m_rigidBodies[i].get();
+        if (meta.boneIndex >= 0 && meta.boneIndex < scene.boneCount()) {
+            glm::mat4 boneWorld = scene.worldMatrix(meta.boneIndex);
+            glm::mat4 bodyWorld = boneWorld * meta.boneToBodyOffset;
+            btTransform trans = glmToBtTransform(bodyWorld);
+
+            body->setWorldTransform(trans);
+            if (body->getMotionState()) {
+                body->getMotionState()->setWorldTransform(trans);
+            }
+            body->setLinearVelocity(btVector3(0.0f, 0.0f, 0.0f));
+            body->setAngularVelocity(btVector3(0.0f, 0.0f, 0.0f));
+            body->clearForces();
+            if (meta.physicsMode >= 1) {
+                body->activate(true);
+            }
+        } else {
+            body->setWorldTransform(meta.restBtTransform);
+            if (body->getMotionState()) {
+                body->getMotionState()->setWorldTransform(meta.restBtTransform);
+            }
+            body->setLinearVelocity(btVector3(0.0f, 0.0f, 0.0f));
+            body->setAngularVelocity(btVector3(0.0f, 0.0f, 0.0f));
+            body->clearForces();
+            if (meta.physicsMode >= 1) {
+                body->activate(true);
+            }
+        }
+    }
+}
+
+void PmxPhysicsEngine::reset(PmxRuntimeScene* scene) {
+    if (scene) {
+        resetToBoneTransforms(*scene);
+        return;
+    }
+
     for (size_t i = 0; i < m_rigidBodies.size(); ++i) {
         auto* body = m_rigidBodies[i].get();
         const auto& meta = m_bodyMetadata[i];

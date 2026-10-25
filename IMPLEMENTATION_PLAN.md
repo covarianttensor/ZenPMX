@@ -147,6 +147,8 @@ Transform ZenPMX into an interactive posing and animation preview suite (`Transf
 | **Ticket 4.4** | **Real-Time Bullet3 Physics Simulation & 6DoF Spring Constraints** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1 | `121ea4d` |
 | **Ticket 4.5** | **VMD (`.vmd`) Motion & VPD (`.vpd`) Pose File Importer and Playback Engine** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1 | `8fa77f5` |
 | **Ticket 4.6** | **TransformView Viewport Integration & Interactive Timeline Controls** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[DONE]` | Tickets 4.2–4.5 | `7c0ce9a` |
+| **Ticket 4.7** | **Core Evaluator Physics Alignment to Animated Bones** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[IN_PROGRESS]` | Ticket 4.6 | Pending |
+| **Ticket 4.8** | **TransformView Viewport Playback, Dynamic VBO & TimelineBar Hardening** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[TODO]` | Ticket 4.7 | Pending |
 
 ### Detailed Ticket Breakdown for Milestone 4:
 
@@ -168,20 +170,73 @@ Transform ZenPMX into an interactive posing and animation preview suite (`Transf
 
 ---
 
-## 7. Milestone 5 through 6 Roadmap Preview
+## 7. Milestone 5 Ticket Registry: The Top 8 Native C++ Community Power Tools (`v0.5.0-milestone5`)
 
-* **Milestone 5: The Top 8 Native C++ Community Power Tools (`v0.5.0-milestone5`)**
-  - Tool 1: Curved Surface Auto-Rigging (`CurvedSurfaceRigGenerator` — `曲面自動設定`).
-  - Tool 2: Semi-Standard Bone Generator (`SemiStandardBoneGenerator` — `準標準ボーン追加`).
-  - Tool 3: Weight Transfer Engine (`WeightTransferEngine` — `ウェイト転送`).
-  - Tool 4: SDEF Auto-Converter (`SdefConverter` — `ボーンウェイトSDEF化`).
-  - Tool 5: Bone-Chain Hair/Tail Physics Wizard (`BoneChainPhysicsWizard`).
-  - Tool 6: Anime Face Normal Editor (`FaceNormalEditor` — `法線編集`).
-  - Tool 7: Multi-Stage Bone Splitter (`多段ボーン化`) & Material Morph Creator.
-  - Tool 8: PMX Diagnostics & Crash Validator (`PmxValidator` — 1-click `autoFixAll`).
-* **Milestone 6: External Mono PEPlugin Host & Full MCP Co-Pilot (`v1.0.0`)**
-  - Clean-room `PEPlugin.dll` & `SlimDX.dll` CPU math shim for Linux Mono.
-  - `PmxPluginHost` Unix socket bridge with live modeless WinForms support.
-  - Full 10-tool MCP JSON-RPC 2.0 Co-Pilot server for AI assistants.
-  - Release packaging (standalone AppImage / binary distribution).
+### Overview & Objective
+Implement the top 8 native C++ rigging, physics, weight transfer, normal editing, and diagnostic engines directly in `src/powertools/` (`PmxPowerTools` static library), providing 1-click procedural automation for MMD model building, with full `QUndoStack` reversibility and headless CTest verification.
+
+| Ticket ID | Title | Target Subsystem | Assigned Subagent | Status | Dependencies | Commit |
+| :--- | :--- | :--- | :--- | :---: | :--- | :---: |
+| **Ticket 5.1** | **Semi-Standard Bone Generator & Multi-Stage / Material Morph Tools** | `PmxPowerTools` | `pmx_core_systems_engineer` | `[TODO]` | Ticket 4.6 | Pending |
+| **Ticket 5.2** | **Weight Transfer Engine (AABB/BVH Barycentric) & SDEF Auto-Converter** | `PmxPowerTools` | `pmx_core_systems_engineer` | `[TODO]` | Ticket 5.1 | Pending |
+| **Ticket 5.3** | **Curved Surface Auto-Rigging & Bone-Chain Hair/Tail Physics Wizard** | `PmxPowerTools` | `pmx_core_systems_engineer` | `[TODO]` | Ticket 5.1 | Pending |
+| **Ticket 5.4** | **Anime Face Normal Editor & PMX Model Diagnostics / Crash Validator** | `PmxPowerTools` | `pmx_core_systems_engineer` | `[TODO]` | Ticket 5.1 | Pending |
+| **Ticket 5.5** | **Power Tools QML UI Integration & Dialog Suite** | `pmx-editor` / `PmxViewport` | `pmx_ui_engineer` | `[TODO]` | Tickets 5.1–5.4 | Pending |
+
+### Detailed Ticket Breakdown for Milestone 5:
+
+#### Ticket 5.1: Semi-Standard Bone Generator & Multi-Stage / Material Morph Tools
+* **Target:** `PmxPowerTools` (`src/powertools/SemiStandardBoneGenerator.h/.cpp`, `src/powertools/BatchMorphAndBoneTools.h/.cpp`, `CMakeLists.txt`, `tests/tst_pmx_powertools.cpp`)
+* **Objective:**
+  - Create `PmxPowerTools` static library in `CMakeLists.txt` depending on `PmxCore`, `PmxModels`, `glm`, `QtCore`.
+  - Tool 2 (`SemiStandardBoneGenerator`):
+    - Generates standard MMD helper bones: `全ての親` (Mother), `グルーブ` (Groove), `腰` & `腰キャンセルL/R`, `上半身2` (Torso 2 with weight splitting), `腕捩/手捩` (Arm/Wrist twists with cylindrical weight projection and twist helpers), `親指０`, `足先EX`, and `足D/ひざD/足首D`.
+  - Tool 7 (`BatchMorphAndBoneTools`):
+    - Multi-Stage Bone Splitter (`多段ボーン化`): inserts parent/child duplicate bones and re-links hierarchy.
+    - Material Morph Creator (`材質モーフ一括作成`): 1-click generation of outfit hide/show, blush, shadow, emission morphs.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_powertools`
+
+#### Ticket 5.2: Weight Transfer Engine (AABB/BVH Barycentric) & SDEF Auto-Converter
+* **Target:** `PmxPowerTools` (`src/powertools/WeightTransferEngine.h/.cpp`, `src/powertools/SdefConverter.h/.cpp`, `tests/tst_pmx_powertools.cpp`)
+* **Objective:**
+  - Tool 3 (`WeightTransferEngine`):
+    - Projects target vertices onto source material triangles using AABB/BVH tree.
+    - Computes barycentric weights and transfers BDEF1/2/4 and SDEF ($C, R_0, R_1$) skinning smoothly.
+  - Tool 4 (`SdefConverter`):
+    - Automatically calculates SDEF spherical volume skinning parameters ($C, R_0, R_1$) for 2-bone joint transitions.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_powertools`
+
+#### Ticket 5.3: Curved Surface Auto-Rigging & Bone-Chain Hair/Tail Physics Wizard
+* **Target:** `PmxPowerTools` (`src/powertools/CurvedSurfaceRigGenerator.h/.cpp`, `src/powertools/BoneChainPhysicsWizard.h/.cpp`, `tests/tst_pmx_powertools.cpp`)
+* **Objective:**
+  - Tool 1 (`CurvedSurfaceRigGenerator`):
+    - Cylindrical surface sampling for skirts, dresses, capes, hair sheets.
+    - Procedural bone grid, bilinear vertex skinning, capsule rigid bodies, and 6DoF spring cross joints.
+  - Tool 5 (`BoneChainPhysicsWizard`):
+    - Root-to-tip hair/tail bone chain walking, tapering capsules, spring joint constraints.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_powertools`
+
+#### Ticket 5.4: Anime Face Normal Editor & PMX Model Diagnostics / Crash Validator
+* **Target:** `PmxPowerTools` (`src/powertools/FaceNormalEditor.h/.cpp`, `src/powertools/PmxValidator.h/.cpp`, `tests/tst_pmx_powertools.cpp`)
+* **Objective:**
+  - Tool 6 (`FaceNormalEditor`):
+    - Fits proxy ellipsoid over anime face geometry and blends normals toward radial gradients.
+  - Tool 8 (`PmxValidator`):
+    - Comprehensive model health audit (zero-length normals, degenerate faces, cyclic bone hierarchies, broken joints, missing display frames, case-sensitive Linux textures) with 1-click `autoFixAll()`.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_powertools`
+
+#### Ticket 5.5: Power Tools QML UI Integration & Dialog Suite
+* **Target:** `pmx-editor` (`src/app/qml/dialogs/`, `src/app/qml/Main.qml`, `src/app/PmxAppBridge.h/.cpp`, `tests/tst_pmx_viewport.cpp`)
+* **Objective:**
+  - Add "Power Tools" menu in `Main.qml`.
+  - Implement modular dialog modals for each tool with configuration options, live preview, and `Ctrl+Z` undo dispatch.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure`
+
+---
+
+## 8. Milestone 6 Roadmap Preview: Plugin Host & Full MCP Co-Pilot (`v1.0.0`)
+* Clean-room `PEPlugin.dll` & `SlimDX.dll` CPU math shim for Linux Mono.
+* `PmxPluginHost` Unix socket bridge with live modeless WinForms support.
+* Full 10-tool MCP JSON-RPC 2.0 Co-Pilot server for AI assistants.
+* Release packaging (standalone AppImage / binary distribution).
 

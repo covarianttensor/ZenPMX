@@ -156,6 +156,10 @@ void PmxRuntimeScene::loadDocument(const PmxDocument& doc) {
     m_physicsEngine = std::make_unique<PmxPhysicsEngine>();
     m_physicsEngine->init(doc, *this);
 
+    evaluateBones();
+    solveIk();
+    resetPhysicsToBones();
+
     evaluate(0.0f);
 }
 
@@ -167,8 +171,12 @@ void PmxRuntimeScene::evaluate(float deltaTime) {
         m_physicsEngine->syncKinematicBodies(*this);
         if (deltaTime > 0.0f) {
             m_physicsEngine->stepSimulation(deltaTime);
+            m_physicsEngine->syncDynamicBones(*this);
+        } else {
+            // Static pose or scrubbing: align dynamic rigid bodies to current bone transforms
+            // to prevent syncDynamicBones from pulling bones to stale rest coordinates
+            m_physicsEngine->resetToBoneTransforms(*this);
         }
-        m_physicsEngine->syncDynamicBones(*this);
     }
     evaluatePostPhysicsBones();
     deformVertices();
@@ -462,9 +470,14 @@ void PmxRuntimeScene::resetTransforms() {
 }
 
 void PmxRuntimeScene::resetPhysics() {
+    evaluateBones();
+    solveIk();
+    resetPhysicsToBones();
+}
+
+void PmxRuntimeScene::resetPhysicsToBones() {
     if (m_physicsEngine) {
-        m_physicsEngine->reset();
-        m_physicsEngine->syncDynamicBones(*this);
+        m_physicsEngine->resetToBoneTransforms(*this);
     }
 }
 

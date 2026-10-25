@@ -80,6 +80,7 @@ public:
     void setPhysicsEnabled(bool enabled) { m_physicsEnabled = enabled; }
     bool isPhysicsEnabled() const { return m_physicsEnabled; }
     void resetPhysics();
+    void resetPhysicsToBones();
     void setBoneWorldMatrix(int boneIndex, const glm::mat4& worldMatrix);
 
     // Transform & Morph manipulation

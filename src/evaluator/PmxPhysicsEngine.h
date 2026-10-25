@@ -34,7 +34,8 @@ public:
     PmxPhysicsEngine& operator=(PmxPhysicsEngine&&) noexcept;
 
     void init(const PmxDocument& doc, const PmxRuntimeScene& scene);
-    void reset();
+    void reset(PmxRuntimeScene* scene = nullptr);
+    void resetToBoneTransforms(PmxRuntimeScene& scene);
 
     void stepSimulation(float deltaTime, int maxSubSteps = 10, float fixedTimeStep = 1.0f / 60.0f);
     void syncKinematicBodies(PmxRuntimeScene& scene);
