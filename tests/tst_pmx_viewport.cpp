@@ -18,6 +18,7 @@
 #include <QTest>
 #include <QUndoCommand>
 #include <QFile>
+#include <rhi/qshader.h>
 #include <cmath>
 #include <limits>
 
@@ -40,10 +41,13 @@ private slots:
     void testAppBridgeBatchOperationBoundaries();
     void testAppBridgeLanguageToggle();
     void testShaderResourcesLoaded();
+    void testEdgeExtrusionMath();
+    void testMeshVertexEdgeScalePropagation();
     void testSphereUVCalculation();
     void testToonLookupMath();
     void testTextureCacheFallbacks();
     void testMaterialBatchPartitioning();
+    void testEdgeMaterialBatchFiltering();
 };
 
 void tst_pmx_viewport::testCameraDefaults() {
@@ -559,14 +563,122 @@ void tst_pmx_viewport::testAppBridgeLanguageToggle() {
 
 void tst_pmx_viewport::testShaderResourcesLoaded() {
     PmxViewportItem item;
-    QVERIFY(QFile::exists(QStringLiteral(":/shaders/mesh.vert.qsb")));
-    QVERIFY(QFile::exists(QStringLiteral(":/shaders/mesh.frag.qsb")));
-    QVERIFY(QFile::exists(QStringLiteral(":/shaders/lines.vert.qsb")));
-    QVERIFY(QFile::exists(QStringLiteral(":/shaders/lines.frag.qsb")));
+    const QStringList shaderPaths = {
+        QStringLiteral(":/shaders/mesh.vert.qsb"),
+        QStringLiteral(":/shaders/mesh.frag.qsb"),
+        QStringLiteral(":/shaders/lines.vert.qsb"),
+        QStringLiteral(":/shaders/lines.frag.qsb"),
+        QStringLiteral(":/shaders/pmx_edge.vert.qsb"),
+        QStringLiteral(":/shaders/pmx_edge.frag.qsb")
+    };
 
-    QFile vertFile(QStringLiteral(":/shaders/mesh.vert.qsb"));
-    QVERIFY(vertFile.open(QIODevice::ReadOnly));
-    QVERIFY(vertFile.size() > 0);
+    for (const QString& path : shaderPaths) {
+        QVERIFY2(QFile::exists(path), qPrintable(path));
+        QFile f(path);
+        QVERIFY2(f.open(QIODevice::ReadOnly), qPrintable(path));
+        QByteArray data = f.readAll();
+        QVERIFY2(data.size() > 0, qPrintable(path));
+        QShader shader = QShader::fromSerialized(data);
+        QVERIFY2(shader.isValid(), qPrintable(QString("Failed to deserialize valid QShader from: %1").arg(path)));
+    }
+}
+
+void tst_pmx_viewport::testEdgeExtrusionMath() {
+    // Math formula: extrudedPos = inPosition + inNormal * (edgeSize * edgeScale * 0.01f)
+
+    // 1. Origin vertex with unit normal along +Y, standard 1.0 size and 1.0 scale
+    glm::vec3 pos1(0.0f, 0.0f, 0.0f);
+    glm::vec3 norm1(0.0f, 1.0f, 0.0f);
+    glm::vec3 ext1 = PmxViewportItem::calculateEdgeExtrusion(pos1, norm1, 1.0f, 1.0f);
+    QCOMPARE(ext1.x, 0.0f);
+    QCOMPARE(ext1.y, 0.01f);
+    QCOMPARE(ext1.z, 0.0f);
+
+    // 2. Translated vertex with +Z normal, edgeSize=2.0, edgeScale=1.5
+    // displacement = 2.0 * 1.5 * 0.01 = 0.03
+    glm::vec3 pos2(10.0f, 20.0f, 30.0f);
+    glm::vec3 norm2(0.0f, 0.0f, 1.0f);
+    glm::vec3 ext2 = PmxViewportItem::calculateEdgeExtrusion(pos2, norm2, 2.0f, 1.5f);
+    QCOMPARE(ext2.x, 10.0f);
+    QCOMPARE(ext2.y, 20.0f);
+    QVERIFY(std::abs(ext2.z - 30.03f) < 1e-5f);
+
+    // 3. Zero edgeScale suppresses extrusion completely
+    glm::vec3 extZeroScale = PmxViewportItem::calculateEdgeExtrusion(pos2, norm2, 2.0f, 0.0f);
+    QCOMPARE(extZeroScale, pos2);
+
+    // 4. Zero edgeSize suppresses extrusion completely
+    glm::vec3 extZeroSize = PmxViewportItem::calculateEdgeExtrusion(pos2, norm2, 0.0f, 1.5f);
+    QCOMPARE(extZeroSize, pos2);
+
+    // 5. Diagonal normal vector
+    glm::vec3 diagNorm = glm::normalize(glm::vec3(1.0f, 2.0f, -2.0f));
+    glm::vec3 pos5(1.0f, 2.0f, 3.0f);
+    float edgeSize = 2.5f;
+    float edgeScale = 0.8f;
+    glm::vec3 extDiag = PmxViewportItem::calculateEdgeExtrusion(pos5, diagNorm, edgeSize, edgeScale);
+    glm::vec3 expectedDiag = pos5 + diagNorm * (2.5f * 0.8f * 0.01f);
+    QVERIFY(glm::distance(extDiag, expectedDiag) < 1e-5f);
+
+    // 6. Negative edgeScale (inversion along normal)
+    // displacement = 2.0 * (-1.0) * 0.01 = -0.02
+    glm::vec3 extNegScale = PmxViewportItem::calculateEdgeExtrusion(pos2, norm2, 2.0f, -1.0f);
+    QCOMPARE(extNegScale.x, 10.0f);
+    QCOMPARE(extNegScale.y, 20.0f);
+    QVERIFY(std::abs(extNegScale.z - 29.98f) < 1e-5f);
+}
+
+void tst_pmx_viewport::testMeshVertexEdgeScalePropagation() {
+    PmxDocument doc;
+
+    PmxVertex v0;
+    v0.position = glm::vec3(1.0f, 2.0f, 3.0f);
+    v0.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+    v0.uv = glm::vec2(0.2f, 0.4f);
+    v0.edgeScale = 1.0f; // Default
+
+    PmxVertex v1;
+    v1.position = glm::vec3(-5.0f, 10.0f, -15.0f);
+    v1.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+    v1.uv = glm::vec2(0.5f, 0.5f);
+    v1.edgeScale = 0.0f; // Suppressed
+
+    PmxVertex v2;
+    v2.position = glm::vec3(100.0f, 200.0f, 300.0f);
+    v2.normal = glm::vec3(1.0f, 0.0f, 0.0f);
+    v2.uv = glm::vec2(0.9f, 0.1f);
+    v2.edgeScale = 2.75f; // Thickened
+
+    PmxVertex v3;
+    v3.position = glm::vec3(2.0f, 4.0f, 6.0f);
+    v3.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+    v3.uv = glm::vec2(0.1f, 0.2f);
+    v3.edgeScale = -1.0f; // Negative edgeScale
+
+    doc.vertices = { v0, v1, v2, v3 };
+
+    auto staged = PmxViewportItem::stageVertices(doc);
+    QCOMPARE(staged.size(), 4u);
+
+    // Verify edgeScale correctly propagated for all vertices
+    QCOMPARE(staged[0].edgeScale, 1.0f);
+    QCOMPARE(staged[1].edgeScale, 0.0f);
+    QCOMPARE(staged[2].edgeScale, 2.75f);
+    QCOMPARE(staged[3].edgeScale, -1.0f);
+
+    // Also verify coordinate handedness conversion is preserved
+    QCOMPARE(staged[0].position, glm::vec3(1.0f, 2.0f, -3.0f));
+    QCOMPARE(staged[0].normal, glm::vec3(0.0f, 1.0f, 0.0f));
+    QCOMPARE(staged[0].uv, glm::vec2(0.2f, 0.4f));
+
+    QCOMPARE(staged[1].position, glm::vec3(-5.0f, 10.0f, 15.0f));
+    QCOMPARE(staged[1].normal, glm::vec3(0.0f, 0.0f, -1.0f));
+
+    QCOMPARE(staged[2].position, glm::vec3(100.0f, 200.0f, -300.0f));
+
+    QCOMPARE(staged[3].position, glm::vec3(2.0f, 4.0f, -6.0f));
+    QCOMPARE(staged[3].normal, glm::vec3(0.0f, 1.0f, 0.0f));
+    QCOMPARE(staged[3].uv, glm::vec2(0.1f, 0.2f));
 }
 
 void tst_pmx_viewport::testSphereUVCalculation() {
@@ -784,6 +896,120 @@ void tst_pmx_viewport::testMaterialBatchPartitioning() {
     for (const auto& b : batchesExcess) {
         QVERIFY(b.indexOffset + b.indexCount <= stagedExcess.size());
     }
+}
+
+void tst_pmx_viewport::testEdgeMaterialBatchFiltering() {
+    PmxDocument doc;
+    for (int i = 0; i < 3; ++i) {
+        PmxVertex v;
+        v.position = glm::vec3(static_cast<float>(i), 0.0f, 0.0f);
+        doc.vertices.push_back(v);
+    }
+    // 1 triangle per material (3 indices each, total 18 indices for 6 materials)
+    doc.faceIndices = {
+        0, 1, 2,
+        0, 1, 2,
+        0, 1, 2,
+        0, 1, 2,
+        0, 1, 2,
+        0, 1, 2
+    };
+
+    // Mat 0: Standard valid edge: drawFlags 0x10, edgeSize > 0, edgeColor.a > 0 -> hasEdge true
+    PmxMaterial m0;
+    m0.faceVertexCount = 3;
+    m0.drawFlags = 0x1F; // Bit 4 (0x10) set
+    m0.edgeSize = 1.0f;
+    m0.edgeColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    doc.materials.push_back(m0);
+
+    // Mat 1: Bit 4 cleared (0x0F) -> hasEdge false
+    PmxMaterial m1;
+    m1.faceVertexCount = 3;
+    m1.drawFlags = 0x0F; // No 0x10 bit
+    m1.edgeSize = 1.0f;
+    m1.edgeColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    doc.materials.push_back(m1);
+
+    // Mat 2: edgeSize == 0.0f -> hasEdge false
+    PmxMaterial m2;
+    m2.faceVertexCount = 3;
+    m2.drawFlags = 0x10;
+    m2.edgeSize = 0.0f;
+    m2.edgeColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    doc.materials.push_back(m2);
+
+    // Mat 3: edgeSize < 0.0f -> hasEdge false
+    PmxMaterial m3;
+    m3.faceVertexCount = 3;
+    m3.drawFlags = 0x10;
+    m3.edgeSize = -1.0f;
+    m3.edgeColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    doc.materials.push_back(m3);
+
+    // Mat 4: edgeColor.a == 0.0f -> hasEdge false
+    PmxMaterial m4;
+    m4.faceVertexCount = 3;
+    m4.drawFlags = 0x10;
+    m4.edgeSize = 1.0f;
+    m4.edgeColor = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    doc.materials.push_back(m4);
+
+    // Mat 5: edgeColor.a < 0.0f -> hasEdge false
+    PmxMaterial m5;
+    m5.faceVertexCount = 3;
+    m5.drawFlags = 0x10;
+    m5.edgeSize = 1.0f;
+    m5.edgeColor = glm::vec4(0.0f, 0.0f, 0.0f, -0.5f);
+    doc.materials.push_back(m5);
+
+    // Mat 6: faceVertexCount == 0 with edge flag 0x10 enabled -> hasEdge true, indexCount 0
+    PmxMaterial m6;
+    m6.faceVertexCount = 0;
+    m6.drawFlags = 0x10;
+    m6.edgeSize = 1.0f;
+    m6.edgeColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    doc.materials.push_back(m6);
+
+    // Mat 7: Non-finite edgeSize (NaN) -> hasEdge false
+    PmxMaterial m7;
+    m7.faceVertexCount = 3;
+    m7.drawFlags = 0x10;
+    m7.edgeSize = std::numeric_limits<float>::quiet_NaN();
+    m7.edgeColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    doc.materials.push_back(m7);
+
+    // Mat 8: Non-finite edgeColor.a (Inf) -> hasEdge false
+    PmxMaterial m8;
+    m8.faceVertexCount = 3;
+    m8.drawFlags = 0x10;
+    m8.edgeSize = 1.0f;
+    m8.edgeColor = glm::vec4(0.0f, 0.0f, 0.0f, std::numeric_limits<float>::infinity());
+    doc.materials.push_back(m8);
+
+    std::vector<uint32_t> stagedIndices;
+    auto batches = PmxViewportItem::partitionMaterialBatches(doc, stagedIndices);
+
+    QCOMPARE(batches.size(), 9u);
+    QVERIFY(batches[0].hasEdge);
+    QVERIFY(!batches[1].hasEdge);
+    QVERIFY(!batches[2].hasEdge);
+    QVERIFY(!batches[3].hasEdge);
+    QVERIFY(!batches[4].hasEdge);
+    QVERIFY(!batches[5].hasEdge);
+    QVERIFY(batches[6].hasEdge);
+    QCOMPARE(batches[6].indexCount, 0u);
+    QVERIFY(!batches[7].hasEdge);
+    QVERIFY(!batches[8].hasEdge);
+
+    // Also verify empty materials doc produces hasEdge == false
+    PmxDocument emptyMatDoc;
+    emptyMatDoc.vertices = doc.vertices;
+    emptyMatDoc.faceIndices = { 0, 1, 2 };
+    std::vector<uint32_t> emptyIndices;
+    auto emptyBatches = PmxViewportItem::partitionMaterialBatches(emptyMatDoc, emptyIndices);
+    QCOMPARE(emptyBatches.size(), 1u);
+    QVERIFY(!emptyBatches[0].hasEdge);
 }
 
 QTEST_MAIN(tst_pmx_viewport)

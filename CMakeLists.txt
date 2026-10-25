@@ -165,6 +165,8 @@ qt_add_shaders(PmxViewport "pmx_shaders"
         src/viewport/shaders/mesh.frag
         src/viewport/shaders/lines.vert
         src/viewport/shaders/lines.frag
+        src/viewport/shaders/pmx_edge.vert
+        src/viewport/shaders/pmx_edge.frag
 )
 
 add_executable(pmx-editor

@@ -6,6 +6,7 @@
 #include <QMatrix4x4>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 
 inline void initShaders() {
     Q_INIT_RESOURCE(pmx_shaders);
@@ -46,6 +47,7 @@ PmxRhiRenderer::~PmxRhiRenderer() {
     delete m_lineSrb;
     delete m_meshPipelineCullNone;
     delete m_meshPipelineCullBack;
+    delete m_edgePipeline;
     delete m_linePipeline;
     delete m_meshVertexBuffer;
     delete m_meshIndexBuffer;
@@ -94,6 +96,8 @@ void PmxRhiRenderer::initialize(QRhiCommandBuffer* cb) {
     QShader meshFs = loadShaderFromResource(QStringLiteral(":/shaders/mesh.frag.qsb"));
     QShader linesVs = loadShaderFromResource(QStringLiteral(":/shaders/lines.vert.qsb"));
     QShader linesFs = loadShaderFromResource(QStringLiteral(":/shaders/lines.frag.qsb"));
+    QShader edgeVs = loadShaderFromResource(QStringLiteral(":/shaders/pmx_edge.vert.qsb"));
+    QShader edgeFs = loadShaderFromResource(QStringLiteral(":/shaders/pmx_edge.frag.qsb"));
 
     auto createMeshPipeline = [&](QRhiGraphicsPipeline::CullMode cullMode) -> QRhiGraphicsPipeline* {
         auto* pipe = rhi()->newGraphicsPipeline();
@@ -108,7 +112,8 @@ void PmxRhiRenderer::initialize(QRhiCommandBuffer* cb) {
         inputLayout.setAttributes({
             { 0, 0, QRhiVertexInputAttribute::Float3, offsetof(MeshVertex, position) },
             { 0, 1, QRhiVertexInputAttribute::Float3, offsetof(MeshVertex, normal) },
-            { 0, 2, QRhiVertexInputAttribute::Float2, offsetof(MeshVertex, uv) }
+            { 0, 2, QRhiVertexInputAttribute::Float2, offsetof(MeshVertex, uv) },
+            { 0, 3, QRhiVertexInputAttribute::Float, offsetof(MeshVertex, edgeScale) }
         });
         pipe->setVertexInputLayout(inputLayout);
         pipe->setShaderResourceBindings(m_dummyLayoutSrb);
@@ -128,6 +133,45 @@ void PmxRhiRenderer::initialize(QRhiCommandBuffer* cb) {
     }
     if (!m_meshPipelineCullBack) {
         m_meshPipelineCullBack = createMeshPipeline(QRhiGraphicsPipeline::Back);
+    }
+
+    if (!m_edgePipeline) {
+        m_edgePipeline = rhi()->newGraphicsPipeline();
+        m_edgePipeline->setShaderStages({
+            { QRhiShaderStage::Vertex, edgeVs },
+            { QRhiShaderStage::Fragment, edgeFs }
+        });
+        QRhiVertexInputLayout inputLayout;
+        inputLayout.setBindings({
+            { sizeof(MeshVertex) }
+        });
+        inputLayout.setAttributes({
+            { 0, 0, QRhiVertexInputAttribute::Float3, offsetof(MeshVertex, position) },
+            { 0, 1, QRhiVertexInputAttribute::Float3, offsetof(MeshVertex, normal) },
+            { 0, 2, QRhiVertexInputAttribute::Float2, offsetof(MeshVertex, uv) },
+            { 0, 3, QRhiVertexInputAttribute::Float, offsetof(MeshVertex, edgeScale) }
+        });
+        m_edgePipeline->setVertexInputLayout(inputLayout);
+        m_edgePipeline->setShaderResourceBindings(m_dummyLayoutSrb);
+        m_edgePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_edgePipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+        m_edgePipeline->setCullMode(QRhiGraphicsPipeline::Front);
+        m_edgePipeline->setFrontFace(QRhiGraphicsPipeline::CW);
+        m_edgePipeline->setDepthTest(true);
+        m_edgePipeline->setDepthWrite(true);
+        m_edgePipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
+
+        QRhiGraphicsPipeline::TargetBlend blend;
+        blend.enable = true;
+        blend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
+        blend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+        blend.opColor = QRhiGraphicsPipeline::Add;
+        blend.srcAlpha = QRhiGraphicsPipeline::SrcAlpha;
+        blend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+        blend.opAlpha = QRhiGraphicsPipeline::Add;
+        m_edgePipeline->setTargetBlends({ blend });
+
+        m_edgePipeline->create();
     }
 
     if (!m_linePipeline) {
@@ -218,15 +262,7 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
 
         if (vp->controller()) {
             const auto& doc = vp->controller()->document();
-            m_stagedVertices.reserve(doc.vertices.size());
-            for (const auto& v : doc.vertices) {
-                MeshVertex mv;
-                mv.position = PmxCamera::toRightHanded(v.position);
-                mv.normal = PmxCamera::toRightHanded(v.normal);
-                mv.uv = v.uv;
-                m_stagedVertices.push_back(mv);
-            }
-
+            m_stagedVertices = PmxViewportItem::stageVertices(doc);
             m_stagedMaterials = PmxViewportItem::partitionMaterialBatches(doc, m_stagedIndices);
 
             // Build bone overlay lines
@@ -439,9 +475,20 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
             cb->setShaderResources(gb.srb);
             cb->drawIndexed(gb.staged.indexCount, 1, gb.staged.indexOffset, 0);
         }
+
+        // 3. Inverted-Hull Edge Outline Pass
+        if (m_edgePipeline) {
+            for (const auto& gb : m_gpuBatches) {
+                if (!gb.staged.hasEdge || gb.staged.indexCount == 0) continue;
+
+                cb->setGraphicsPipeline(m_edgePipeline);
+                cb->setShaderResources(gb.srb);
+                cb->drawIndexed(gb.staged.indexCount, 1, gb.staged.indexOffset, 0);
+            }
+        }
     }
 
-    // 3. Bone Overlay
+    // 4. Bone Overlay
     if (m_showBones && m_boneVertexBuffer && m_boneVertexCount > 0 && m_linePipeline) {
         cb->setGraphicsPipeline(m_linePipeline);
         cb->setShaderResources(m_lineSrb);
@@ -500,6 +547,20 @@ std::vector<uint32_t> PmxViewportItem::filterValidTriangleIndices(const std::vec
     return validIndices;
 }
 
+std::vector<MeshVertex> PmxViewportItem::stageVertices(const PmxDocument& doc) {
+    std::vector<MeshVertex> staged;
+    staged.reserve(doc.vertices.size());
+    for (const auto& v : doc.vertices) {
+        MeshVertex mv;
+        mv.position = PmxCamera::toRightHanded(v.position);
+        mv.normal = PmxCamera::toRightHanded(v.normal);
+        mv.uv = v.uv;
+        mv.edgeScale = v.edgeScale;
+        staged.push_back(mv);
+    }
+    return staged;
+}
+
 std::vector<StagedMaterialBatch> PmxViewportItem::partitionMaterialBatches(
     const PmxDocument& doc,
     std::vector<uint32_t>& outStagedIndices)
@@ -515,6 +576,7 @@ std::vector<StagedMaterialBatch> PmxViewportItem::partitionMaterialBatches(
             b.indexCount = static_cast<uint32_t>(outStagedIndices.size());
             b.doubleSided = true;
             b.hasToon = false;
+            b.hasEdge = false;
             batches.push_back(b);
         }
         return batches;
@@ -572,6 +634,9 @@ std::vector<StagedMaterialBatch> PmxViewportItem::partitionMaterialBatches(
         batch.ambient = glm::vec4(mat.ambient, 1.0f);
         batch.edgeColor = mat.edgeColor;
         batch.edgeSize = mat.edgeSize;
+        batch.hasEdge = ((mat.drawFlags & 0x10) != 0)
+            && std::isfinite(mat.edgeSize) && (mat.edgeSize > 0.0f)
+            && std::isfinite(mat.edgeColor.a) && (mat.edgeColor.a > 0.0f);
 
         // Diffuse texture
         batch.diffuseTexturePath = resolveTexturePath(mat.textureIndex);

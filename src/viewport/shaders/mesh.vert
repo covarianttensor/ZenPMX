@@ -3,6 +3,7 @@
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
+layout(location = 3) in float inEdgeScale;
 
 layout(std140, binding = 0) uniform FrameAndMaterialUbo {
     mat4 u_mvp;

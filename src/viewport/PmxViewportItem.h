@@ -15,6 +15,13 @@ namespace pmx {
 
 class PmxViewportItem;
 
+struct MeshVertex {
+    glm::vec3 position{0.0f};
+    glm::vec3 normal{0.0f};
+    glm::vec2 uv{0.0f};
+    float edgeScale = 1.0f;
+};
+
 struct StagedMaterialBatch {
     int materialIndex = -1;
     uint32_t indexOffset = 0;
@@ -23,6 +30,7 @@ struct StagedMaterialBatch {
     uint8_t sphereMode = 0;
     bool hasToon = false;
     int sharedToonIndex = -1;
+    bool hasEdge = false;
     QString diffuseTexturePath;
     QString sphereTexturePath;
     QString toonTexturePath;
@@ -45,12 +53,6 @@ public:
     void buildGrid(QRhiCommandBuffer* cb);
 
 private:
-    struct MeshVertex {
-        glm::vec3 position;
-        glm::vec3 normal;
-        glm::vec2 uv;
-    };
-
     struct LineVertex {
         glm::vec3 position;
         glm::vec4 color;
@@ -92,6 +94,7 @@ private:
     QRhiShaderResourceBindings* m_lineSrb = nullptr;
     QRhiGraphicsPipeline* m_meshPipelineCullNone = nullptr;
     QRhiGraphicsPipeline* m_meshPipelineCullBack = nullptr;
+    QRhiGraphicsPipeline* m_edgePipeline = nullptr;
     QRhiGraphicsPipeline* m_linePipeline = nullptr;
 
     QRhiBuffer* m_meshVertexBuffer = nullptr;
@@ -141,6 +144,10 @@ public:
 
     static std::vector<uint32_t> filterValidTriangleIndices(const std::vector<int32_t>& rawIndices, size_t vertexCount);
     static std::vector<StagedMaterialBatch> partitionMaterialBatches(const PmxDocument& doc, std::vector<uint32_t>& outStagedIndices);
+    static std::vector<MeshVertex> stageVertices(const PmxDocument& doc);
+    static inline glm::vec3 calculateEdgeExtrusion(const glm::vec3& position, const glm::vec3& normal, float edgeSize, float edgeScale) {
+        return position + normal * (edgeSize * edgeScale * 0.01f);
+    }
 
     pmx::PmxDocumentController* controller() const { return m_controller; }
     void setController(pmx::PmxDocumentController* controller);
