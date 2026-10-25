@@ -9,12 +9,12 @@
 
 ```text
 ================================================================================
-[█████████████████████████████████████░░░] 94% COMPLETE
+[███████████████████████████████████████░] 97% COMPLETE
 ================================================================================
 Project: ZenPMX (Native Linux PMX Editor)
 Repository: https://github.com/covarianttensor/ZenPMX (Public)
-Status: Milestone 1, 2 & 3 STABILIZED (v0.1.0-milestone1, v0.2.0-milestone2, v0.3.0-milestone3)
-Active Phase: Milestone 4 (Live TransformView: CCDIK, SDEF & Bullet3 Physics)
+Status: Milestone 1, 2, 3 & 4 STABILIZED (v0.1.0-milestone1, v0.2.0-milestone2, v0.3.0-milestone3, v0.4.0-milestone4)
+Active Phase: Milestone 5 (The Top 8 Native C++ Community Power Tools)
 ```
 
 ---
@@ -26,8 +26,8 @@ Active Phase: Milestone 4 (Live TransformView: CCDIK, SDEF & Bullet3 Physics)
 | **Milestone 1** | **The Tracer Bullet (End-to-End Pipeline)** | 5 | `[DONE]` | **PASS** | `v0.1.0-milestone1` |
 | **Milestone 2** | **Complete 8-Tab Spreadsheet Inspector & Kitbash Merger** | 5 | `[DONE]` | **PASS** | `v0.2.0-milestone2` |
 | **Milestone 3** | **Full MMD Shader Pipeline & Interactive 3D Edit Mode** | 5 | `[DONE]` | **PASS** | `v0.3.0-milestone3` |
-| **Milestone 4** | **Live TransformView (CCDIK, SDEF & Bullet3 Physics)** | 6 | `[ACTIVE]` | In Progress | `v0.4.0-milestone4` |
-| **Milestone 5** | **The Top 8 Native C++ Community Power Tools** | 5 | `[TODO]` | Pending | `v0.5.0-milestone5` |
+| **Milestone 4** | **Live TransformView (CCDIK, SDEF & Bullet3 Physics)** | 6 | `[DONE]` | **PASS** | `v0.4.0-milestone4` |
+| **Milestone 5** | **The Top 8 Native C++ Community Power Tools** | 5 | `[ACTIVE]` | In Progress | `v0.5.0-milestone5` |
 | **Milestone 6** | **External Mono PEPlugin Host & Full MCP Co-Pilot** | 4 | `[TODO]` | Pending | `v1.0.0` |
 
 ---
@@ -146,7 +146,7 @@ Transform ZenPMX into an interactive posing and animation preview suite (`Transf
 | **Ticket 4.3** | **High-Fidelity SDEF (Spherical Skinning) & BDEF1/2/4 Vertex Deformer** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1, 4.2 | `5a6101a` |
 | **Ticket 4.4** | **Real-Time Bullet3 Physics Simulation & 6DoF Spring Constraints** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1 | `121ea4d` |
 | **Ticket 4.5** | **VMD (`.vmd`) Motion & VPD (`.vpd`) Pose File Importer and Playback Engine** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1 | `8fa77f5` |
-| **Ticket 4.6** | **TransformView Viewport Integration & Interactive Timeline Controls** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[ACTIVE]` | Tickets 4.2–4.5 | Pending |
+| **Ticket 4.6** | **TransformView Viewport Integration & Interactive Timeline Controls** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[DONE]` | Tickets 4.2–4.5 | `7c0ce9a` |
 
 ### Detailed Ticket Breakdown for Milestone 4:
 

@@ -8,11 +8,11 @@
 ## 1. Project Status Overview
 * **Project Name:** ZenPMX (Native Linux PMX Editor)
 * **GitHub Repository:** [`https://github.com/covarianttensor/ZenPMX`](https://github.com/covarianttensor/ZenPMX) (Public)
-* **Active Phase:** Milestone 4: Live TransformView (`PmxEvaluator` + CCDIK + SDEF + Bullet3 + VMD)
-* **Active Target:** Ticket 4.6 (TransformView Viewport Integration & Interactive Timeline Controls)
-* **Overall Completion Level:** 94%
-* **Current Working Tree:** Clean (feature commit `8fa77f5`)
-* **Test Suite Status:** 8/8 CTest suites passing (173 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.70s)
+* **Active Phase:** Milestone 5: The Top 8 Native C++ Community Power Tools
+* **Active Target:** Milestone 5 Initialization & Ticket 5.1
+* **Overall Completion Level:** 97%
+* **Current Working Tree:** Clean (feature commit `7c0ce9a`, release tag `v0.4.0-milestone4`)
+* **Test Suite Status:** 8/8 CTest suites passing (179 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.68s)
 
 ---
 
@@ -50,7 +50,7 @@
 | 2026-10-25 04:56 | **Ticket-3.5** | Viewport / Models (`PmxViewport` / `PmxModels`) | `pmx_ui_engineer` | `f9a5312` | 7/7 CTest (43/43 QtTest) | ~48k | Interactive weight painting engine, heatmap shaders, radius/falloff brush, multi-bone normalization, sparse undo. Strike 1 resolved test call & encapsulation. |
 | 2026-10-25 07:07 | **Ticket-3.6** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | `3f175fb` | 7/7 CTest (47/47 QtTest) | ~55k | Regression bugfix: Shaded mesh distortion resolved by fixing pipeline binding order, zero normal guard in mesh.vert, de-hollowed tests. (Strike 1 resolved). |
 
-### Milestone 4: Live TransformView (In Progress)
+### Milestone 4: Live TransformView (Completed & Tagged `v0.4.0-milestone4`)
 
 | Date / UTC | Ticket ID | Subsystem Target | Subagent | Commit | Test Status | Token Burn | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
@@ -59,6 +59,7 @@
 | 2026-10-25 15:22 | **Ticket-4.3** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `5a6101a` | 8/8 CTest (27/27 QtTest) | ~42k | High-Fidelity SDEF spherical volume skinning, BDEF1/2/4/QDEF, morph integration, safe normal guards. (Strike 1 resolved SDEF auxiliary bounds spec violation). |
 | 2026-10-25 16:14 | **Ticket-4.4** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `121ea4d` | 8/8 CTest (36/36 QtTest) | ~46k | Bullet3 discrete dynamics, 6DoF spring constraints, kinematic tracking, collision filtering. (Strike 1 resolved PhysicsAndBone translation preservation & ZXY Euler orientation). |
 | 2026-10-25 17:06 | **Ticket-4.5** | Evaluator (`PmxEvaluator`) | `pmx_core_systems_engineer` | `8fa77f5` | 8/8 CTest (47/47 QtTest) | ~45k | VMD motion & VPD pose file importer, cubic Bézier spline & quaternion slerp playback engine. (Strike 1 resolved NaN over-read & untrusted buffer bounds checks). |
+| 2026-10-25 17:57 | **Ticket-4.6** | Viewport / App (`PmxViewport` / `pmx-editor`) | `pmx_ui_engineer` | `7c0ce9a` | 8/8 CTest (53/53 QtTest) | ~48k | Live TransformView viewport integration, dynamic VBO stream, TimelineBar.qml. (Strike 1 resolved QML read-only property & rest-pose material sync). |
 
 ---
 
@@ -254,6 +255,19 @@
   - Worker resolved all items: added `std::isnan(frame)` guards in `setFrame()`, `evaluateBezier()`, and track search routines (`it == track.end()` and `it == track.begin()` fallback); added division-based bounds checking before all `.reserve()` calls in `VmdImporter.cpp`; added `testAnimationPlayerNanHandling` and `testVmdMalformedBufferRejection`.
   - Adversarial QA Re-Audit PASSED; committed at `8fa77f5`.
 
+### Incident 16: Ticket 4.6 QML Read-Only implicitWidth & Rest-Pose Material Sync (Strike 1)
+* **Date:** 2026-10-25 17:47 UTC
+* **Subsystem:** `pmx-editor` / `PmxViewport` (`src/app/qml/TimelineBar.qml`, `src/viewport/PmxViewportItem.cpp`, `tests/tst_pmx_viewport.cpp`)
+* **Root Cause:**
+  1. `TimelineBar.qml` assigned `implicitWidth: 50` on `Label`, which is read-only in Qt 6 Quick Controls, causing `QQmlApplicationEngine failed to load component` and crashing `pmx-editor` on launch with exit code 255.
+  2. In `PmxViewportItem::synchronize()`, `m_stagedMaterials` was only re-partitioned on `docDirty || m_stagedMaterials.empty()`. When `transformViewMode` was toggled off, `m_stagedMaterials` retained mutated material morph parameters indefinitely.
+  3. Missing test coverage for material morph synchronization and rest-pose restoration on mode exit.
+* **Corrective Action:**
+  - In strict accordance with Golden Law 5 (The 2-Strike Rule), worker subagent was NOT killed.
+  - Lead Architect dispatched exact QA audit logs and remediation directives to the active worker via `send_message`.
+  - Worker resolved all items: used `Layout.preferredWidth` in `TimelineBar.qml`, added `transformViewChanged` trigger in `synchronize()` line 349, and added `testTransformViewMaterialMorphSyncAndRestoration` in `tests/tst_pmx_viewport.cpp`.
+  - Adversarial QA Re-Audit PASSED; committed at `7c0ce9a`.
+
 ---
 
 ## 5. Milestone 2 Acceptance & Sign-Off Receipt
@@ -279,4 +293,20 @@
   - Wireframe Visualizers: 3D octahedral bone pyramids, Bullet3 rigid bodies (Sphere, Box, Capsule) color-coded by physics mode, 6DoF spring joint coordinate crosses, limit arcs, and body connection lines.
   - Weight Painting Engine: Continuous heatmap gradient shader, 3D spherical falloff brush (Linear, Gaussian, Constant), multi-bone weight normalization, sparse reversible undo commands.
   - Ready for Milestone 4 (Live TransformView: CCDIK, SDEF & Bullet3 Physics).
+
+---
+
+## 7. Milestone 4 Acceptance & Sign-Off Receipt
+* **Release Tag:** `v0.4.0-milestone4`
+* **Commit:** `7c0ce9a`
+* **Verification Command:** `ctest --test-dir build --output-on-failure`
+* **Test Pass Rate:** 8/8 test suites (179 unit tests), 0 failures, 0 ASan/UBSan errors in 1.68s.
+* **Architect Sign-Off:** Milestone 4 (Live TransformView: CCDIK, SDEF & Bullet3 Physics) Acceptance Gate PASSED.
+  - Headless `PmxEvaluator` static runtime engine with deform tier topological sorting, append bone inheritance (`付与`), and morph weight accumulators.
+  - Analytical MMD CCDIK constraint solver with Euler ZXY decomposition, knee angle limits, and iteration bounding.
+  - High-fidelity SDEF spherical skinning and BDEF1/2/4 vertex deformer with zero rigid-body distortion and safe normal guards.
+  - Real-time 60 Hz Bullet3 discrete dynamics simulation with 6DoF spring constraints, kinematic bone tracking, and `PhysicsAndBone` mode.
+  - Lossless VMD 2.0 motion and VPD ASCII pose file importers with cubic Bézier spline interpolation and quaternion slerp.
+  - Live TransformView viewport integration with dynamic GPU VBO streaming, dynamic bone and physics wireframes, and interactive QML `TimelineBar` transport controls.
+  - Ready for Milestone 5 (The Top 8 Native C++ Community Power Tools).
 

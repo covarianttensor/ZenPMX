@@ -824,7 +824,7 @@
 * **Assigned Subagent:** `pmx_ui_engineer`
 * **Target Subsystems:** `PmxViewport` & `pmx-editor` (`src/viewport/PmxViewportItem.h/.cpp`, `src/viewport/PmxTransformViewBridge.h/.cpp`, `src/app/qml/TransformViewPanel.qml`, `src/app/qml/TimelineBar.qml`, `CMakeLists.txt`, `tests/tst_pmx_viewport.cpp`)
 * **Date Issued:** 2026-10-25 10:10 UTC
-* **Status:** `[ACTIVE]`
+* **Status:** `[DONE]` (Committed at `7c0ce9a`, Tagged `v0.4.0-milestone4`)
 * **Specification & Architectural Invariants:**
   1. **Viewport TransformView Dynamic Buffer Streaming:**
      - Connect `PmxRuntimeScene` and `PmxAnimationPlayer` into `PmxViewportItem`.
@@ -832,7 +832,7 @@
      - In TransformView mode, dynamic VBO streaming: upload `scene.deformedPositions()` and `scene.deformedNormals()` each frame to `m_meshVertexBuffer`.
      - Update bone wireframe visualizer to dynamic bone world matrices.
      - Update rigid body and joint wireframe visualizers to dynamic physics bodies.
-  2. **QML Timeline Bar & Controls (`src/app/qml/TimelineBar.qml`, `TransformViewPanel.qml`):**
+  2. **QML Timeline Bar & Controls (`src/app/qml/TimelineBar.qml`, `Main.qml`):**
      - Timeline scrubber: Current frame spinbox / slider, max frame, playback controls (Play, Pause, Stop, Step Forward, Step Back, Loop toggle).
      - File actions: Load Motion (`.vmd`), Load Pose (`.vpd`), Reset Pose.
      - Simulation controls: Physics enable/disable toggle, Physics Reset button.
@@ -840,7 +840,14 @@
      - `testTransformViewModeDeformedMeshUpload`: Verify vertex buffer updates when stepping animation frames.
      - `testTransformViewTimelineScrubbing`: Scrubbing timeline updates scene evaluation.
      - `testTransformViewPhysicsToggling`: Toggling physics state starts/stops Bullet simulation cleanly.
+     - `testTransformViewMaterialMorphSyncAndRestoration`: Verify material morphs sync in TransformView and restore rest-pose on mode exit.
+     - `testTransformViewBoundarySafety`: Verify NaN/Inf/negative frames and null controller safety.
 * **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+* **Strike 1 Incident & Remediation:**
+  - *Incident:* QA audit identified that: (1) `TimelineBar.qml` assigned read-only `implicitWidth: 50` on `Label`, causing fatal `QQmlApplicationEngine` startup crash (exit code 255); (2) `PmxViewportItem::synchronize()` failed to refresh `m_stagedMaterials` on `transformViewChanged`, retaining mutated material morph values when exiting to Edit mode; (3) material morph sync and restoration was untested.
+  - *Remediation:* Per Golden Law 5, worker subagent `fa17a0ca-c753-4941-9832-cc1e5708ffd1` resolved all items: used `Layout.preferredWidth` in `TimelineBar.qml`, added `transformViewChanged` trigger in `synchronize()` line 349, and added `testTransformViewMaterialMorphSyncAndRestoration`.
+* **Adversarial QA Re-Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 17:56 UTC).
+* **DevOps Commit Receipt:** Committed at `7c0ce9a` with 8/8 test suites passing in 1.68s under ASan/UBSan; tagged `v0.4.0-milestone4`.
 
 
 
