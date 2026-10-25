@@ -488,3 +488,54 @@
   - Ensure `PmxViewportItem` always calls `update()` on selection change so rigid body and joint selection highlights redraw immediately.
   - De-hollow unit tests in `tests/tst_pmx_viewport.cpp`: assert exact bone diamond points, non-zero Euler rotation matrices, sphere radius points, box corner extents, capsule dome apexes, and asymmetric joint limit arcs reflecting RH inverted limits.
 
+---
+
+### Ticket 3.5: Interactive Weight Painting Engine with Heatmap Visualization & Radius/Falloff Brush
+* **Assigned Subagent:** `pmx_ui_engineer`
+* **Target Subsystems:** `PmxViewport` / `PmxModels` (Target 4 & Target 3: `src/viewport/`, `src/models/`, `src/app/qml/`, `tests/`)
+* **Date Issued:** 2026-10-25 04:28 UTC
+* **Status:** `[DONE]` (Committed at `f9a5312`)
+* **Specification:**
+  - Weight Heatmap Visualization (`src/viewport/PmxWeightPaintBrush.h/.cpp`, `src/viewport/shaders/pmx_mesh.frag`):
+    - Color ramp gradient helper `weightToColor(float weight)`:
+      - $w \le 0.0$: Blue `vec4(0.0, 0.0, 1.0, 1.0)`
+      - $0.0 < w \le 0.25$: Blue $\to$ Cyan `vec4(0.0, 4*w, 1.0, 1.0)`
+      - $0.25 < w \le 0.5$: Cyan $\to$ Green `vec4(0.0, 1.0, 1.0 - 4*(w - 0.25), 1.0)`
+      - $0.5 < w \le 0.75$: Green $\to$ Yellow `vec4(4*(w - 0.5), 1.0, 0.0, 1.0)`
+      - $0.75 < w \le 1.0$: Yellow $\to$ Red `vec4(1.0, 1.0 - 4*(w - 0.75), 0.0, 1.0)`
+      - $w > 1.0$: Red `vec4(1.0, 0.0, 0.0, 1.0)`
+    - Evaluate active bone weight across BDEF1, BDEF2, BDEF4, SDEF. When in WeightPaint mode, tint or replace mesh diffuse color with the heatmap color.
+  - Interactive 3D Weight Painting Brush (`src/viewport/PmxWeightPaintBrush.h/.cpp`):
+    - Brush operations: `Add`, `Subtract`, `Set`, `Smooth`.
+    - Falloff curves: `Linear` ($1 - d/r$), `Gaussian` ($\exp(-3(d/r)^2)$), `Constant` ($1.0$).
+    - Surface raycasting from mouse cursor against mesh triangles to locate hit point and surface normal.
+    - Multi-bone weight normalization:
+      - Enforce $\sum w_i = 1.0$ across all referenced bones for each affected vertex.
+      - Support BDEF1, BDEF2, BDEF4, and SDEF without floating-point accumulation drift.
+    - 3D wireframe brush cursor: circle geometry visualizing brush radius at intersection point.
+  - Sparse Undo Command (`src/models/PmxUndoCommands.h/.cpp`):
+    - `PmxVertexWeightCommand`: records sparse deltas `(vertexIndex, oldWeightType, newWeightType, oldWeights, newWeights, oldBoneIndices, newBoneIndices)`.
+    - Continuous drag coalescing with `mergeWith()` on matching drag session ID.
+    - Full `undo()` and `redo()` fidelity updating `PmxDocument` and notifying controller.
+  - Viewport & UI Integration (`src/viewport/PmxViewportItem.h/.cpp`, `src/app/qml/Main.qml`):
+    - Add `viewportMode` enum/property (`MeshShaded = 0`, `Wireframe = 1`, `WeightPaint = 2`).
+    - Expose brush parameters (`brushRadius`, `brushStrength`, `brushMode`, `brushFalloff`).
+    - Connect mouse drag to brush evaluation in WeightPaint mode; render brush ring overlay.
+    - Add brush settings toolbar in `Main.qml`.
+  - Deterministic Test Suite (`tests/tst_pmx_viewport.cpp`):
+    - Unit tests for heatmap color ramp values across all brackets.
+    - Unit tests for brush falloff formulas (Linear, Gaussian, Constant).
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+#### Ticket 3.5 — Revision 2 (Strike 1 Remediation)
+* **Date & Timestamp:** 2026-10-25 04:54 UTC
+* **Reason for Revision:**
+  - Strike 1 audit finding detected by `pmx_qa_adversary`:
+    1. **Compilation Failure:** `tests/tst_pmx_viewport.cpp#L2194` called non-existent `controller.setDocument(doc)` instead of `controller.setDocumentInternal(doc)`.
+    2. **Class Encapsulation Gap:** `PmxVertexWeightCommand` lacked `friend class` declaration in `src/models/PmxDocumentController.h`.
+    3. **BDEF4 Elevation Safeguard:** Missing explicit `v.boneWeights[1] = 1.0f - v.boneWeights[0];` initialization before BDEF4 elevation in `src/viewport/PmxWeightPaintBrush.cpp`.
+* **Revision Directives:**
+  - Correct `setDocumentInternal` in test harness.
+  - Add `friend class PmxVertexWeightCommand;` to `PmxDocumentController.h`.
+  - Add explicit BDEF2 weight initialization safeguard before BDEF4 elevation in `PmxWeightPaintBrush.cpp`.
+

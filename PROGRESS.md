@@ -8,11 +8,11 @@
 ## 1. Project Status Overview
 * **Project Name:** ZenPMX (Native Linux PMX Editor)
 * **GitHub Repository:** [`https://github.com/covarianttensor/ZenPMX`](https://github.com/covarianttensor/ZenPMX) (Public)
-* **Active Phase:** Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode)
-* **Next Target:** Ticket 3.5 (Interactive Weight Painting Engine with Heatmap Visualization & Radius/Falloff Brush)
-* **Overall Completion Level:** 70%
-* **Current Working Tree:** Clean (feature commit `1b6afef`)
-* **Test Suite Status:** 7/7 CTest suites passing (119 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.38s)
+* **Active Phase:** Milestone 4 (Live TransformView: CCDIK, SDEF & Bullet3 Physics)
+* **Active Target:** Milestone 4 Planning & Ticket 4.1 Initialization
+* **Overall Completion Level:** 75%
+* **Current Working Tree:** Clean (feature commit `f9a5312`)
+* **Test Suite Status:** 7/7 CTest suites passing (126 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.32s)
 
 ---
 
@@ -39,7 +39,7 @@
 | 2026-10-25 00:38 | **Ticket-2.4** | Core / Models (`PmxCore` / `PmxModels`) | `pmx_core_engineer` | `44caf36` | 6/6 CTest (15/15 QtTest) | ~35k | Kitbash merger engine, 7-entity index remapping, standard bone deduplication, PMX 2.1 elevation, undoable controller integration. |
 | 2026-10-25 01:10 | **Ticket-2.5** | Core / Importer (`PmxCore`) | `pmx_core_engineer` | `c87c34f` | 7/7 CTest (12/12 QtTest) | ~34k | Assimp accessory importer, OBJ/FBX/glTF, LH coordinates, BDEF1 root bone, materials/textures, QA hardened. |
 
-### Milestone 3: Full MMD Shader Pipeline & Interactive 3D Edit Mode (In Progress)
+### Milestone 3: Full MMD Shader Pipeline & Interactive 3D Edit Mode (Completed & Tagged `v0.3.0-milestone3`)
 
 | Date / UTC | Ticket ID | Subsystem Target | Subagent | Commit | Test Status | Token Burn | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
@@ -47,6 +47,7 @@
 | 2026-10-25 02:04 | **Ticket-3.2** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | `d14666f` | 7/7 CTest (22/22 QtTest) | ~38k | Inverted-hull outline pass, per-vertex/material width scaling, CW front-face culling, QSB deserialization test. (Strike 1 resolved). |
 | 2026-10-25 02:35 | **Ticket-3.3** | Viewport / Models (`PmxViewport` / `PmxModels`) | `pmx_ui_engineer` | `e72f5d7` | 7/7 CTest (31/31 QtTest) | ~45k | Interactive 3D gizmos (Translate/Rotate/Scale), ray picking, snapping, symmetry, sparse undo commands. (Strike 1 resolved). |
 | 2026-10-25 04:18 | **Ticket-3.4** | Viewport / Physics (`PmxViewport`) | `pmx_ui_engineer` | `1b6afef` | 7/7 CTest (36/36 QtTest) | ~44k | Wireframe visualizers for bones (octahedron), rigid bodies (sphere/box/capsule), 6DoF joints (cross/limit arcs/anchors). Strike 1 resolved handedness & selection redraw. |
+| 2026-10-25 04:56 | **Ticket-3.5** | Viewport / Models (`PmxViewport` / `PmxModels`) | `pmx_ui_engineer` | `f9a5312` | 7/7 CTest (43/43 QtTest) | ~48k | Interactive weight painting engine, heatmap shaders, radius/falloff brush, multi-bone normalization, sparse undo. Strike 1 resolved test call & encapsulation. |
 
 ---
 
@@ -182,6 +183,18 @@
   - Lead Architect fed exact audit report back to fresh `pmx_ui_engineer` under Strike 1.
   - Subagent instructed to fix handedness inversion on X and Y joint limits, trigger viewport redraw on all selection changes, and de-hollow the unit test suite.
 
+### Incident 11: Ticket 3.5 Test Harness Compilation Error & Encapsulation Hardening (Strike 1)
+* **Date:** 2026-10-25 04:54 UTC
+* **Subsystem:** `PmxViewport` / `PmxModels` (`src/models/PmxDocumentController.h`, `src/viewport/PmxWeightPaintBrush.cpp`, `tests/tst_pmx_viewport.cpp`)
+* **Root Cause:**
+  1. Test harness called non-existent `controller.setDocument(doc)` instead of `controller.setDocumentInternal(doc)`.
+  2. `PmxDocumentController` lacked `friend class PmxVertexWeightCommand;` declaration.
+  3. Missing explicit `v.boneWeights[1]` initialization before BDEF4 elevation in `PmxWeightPaintBrush.cpp`.
+* **Corrective Action:**
+  - In strict accordance with Golden Law 5 (The 2-Strike Rule), worker subagent was NOT killed.
+  - Architect dispatched targeted remediation feedback to the same worker instance via `send_message`.
+
+
 
 ---
 
@@ -194,4 +207,18 @@
   - All 8 canonical PMX tabs fully implemented with virtualized table models, batch operations, multi-select, and search/filtering.
   - Multi-format ingestion operational: Lossless PMX 2.0/2.1 reader/writer, Legacy PMD 1.0 binary importer, Assimp accessory importer (.obj, .fbx, .gltf), and non-destructive kitbash merger with 7-entity mathematical index remapping.
   - Ready for Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode).
+
+---
+
+## 6. Milestone 3 Acceptance & Sign-Off Receipt
+* **Release Tag:** `v0.3.0-milestone3`
+* **Commit:** `f9a5312`
+* **Verification Command:** `ctest --test-dir build --output-on-failure`
+* **Test Pass Rate:** 7/7 test suites (126 unit tests), 0 failures, 0 ASan/UBSan errors in 1.32s.
+* **Architect Sign-Off:** Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode) Acceptance Gate PASSED.
+  - Production-grade MMD render pipeline (`QRhi`): Toon ramp shading, `.sph`/`.spa` sphere maps, inverted-hull silhouette edge outlines with per-vertex scaling.
+  - Interactive 3D Edit Mode: 3D translate/rotate/scale gizmos, raycast picking, numerical snapping, symmetric editing across $X=0$.
+  - Wireframe Visualizers: 3D octahedral bone pyramids, Bullet3 rigid bodies (Sphere, Box, Capsule) color-coded by physics mode, 6DoF spring joint coordinate crosses, limit arcs, and body connection lines.
+  - Weight Painting Engine: Continuous heatmap gradient shader, 3D spherical falloff brush (Linear, Gaussian, Constant), multi-bone weight normalization, sparse reversible undo commands.
+  - Ready for Milestone 4 (Live TransformView: CCDIK, SDEF & Bullet3 Physics).
 
