@@ -96,6 +96,23 @@ target_link_libraries(PmxCore PUBLIC
     ${ASSIMP_TARGET}
 )
 
+add_library(PmxEvaluator STATIC
+    src/evaluator/PmxRuntimeScene.h
+    src/evaluator/PmxRuntimeScene.cpp
+)
+
+target_include_directories(PmxEvaluator PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/evaluator"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core"
+)
+
+target_link_libraries(PmxEvaluator PUBLIC
+    PmxCore
+    Qt6::Core
+    glm::glm
+)
+
 add_library(PmxModels STATIC
     src/models/PmxSelectionManager.h
     src/models/PmxSelectionManager.cpp
@@ -361,3 +378,19 @@ target_link_libraries(tst_assimp_import PRIVATE
 )
 
 add_test(NAME tst_assimp_import COMMAND tst_assimp_import)
+
+add_executable(tst_pmx_evaluator
+    tests/tst_pmx_evaluator.cpp
+)
+
+set_target_properties(tst_pmx_evaluator PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
+)
+
+target_link_libraries(tst_pmx_evaluator PRIVATE
+    PmxEvaluator
+    PmxCore
+    Qt6::Test
+)
+
+add_test(NAME tst_pmx_evaluator COMMAND tst_pmx_evaluator)
