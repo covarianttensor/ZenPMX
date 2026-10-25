@@ -744,6 +744,15 @@ PmxViewportItem::~PmxViewportItem() {
     if (m_playbackTimer) {
         m_playbackTimer->stop();
     }
+    if (m_controller) {
+        disconnect(m_controller, nullptr, this, nullptr);
+    }
+    if (m_undoStack) {
+        disconnect(m_undoStack, nullptr, this, nullptr);
+    }
+    if (m_selectionManager) {
+        disconnect(m_selectionManager, nullptr, this, nullptr);
+    }
 }
 
 QQuickRhiItemRenderer* PmxViewportItem::createRenderer() {
@@ -941,29 +950,29 @@ void PmxViewportItem::setController(pmx::PmxDocumentController* controller) {
     if (m_controller == controller) return;
 
     if (m_controller) {
-        disconnect(m_controller, &pmx::PmxDocumentController::documentLoaded, this, &PmxViewportItem::onDocumentChanged);
-        disconnect(m_controller, &pmx::PmxDocumentController::documentSaved, this, &PmxViewportItem::onDocumentChanged);
-        disconnect(m_controller, &pmx::PmxDocumentController::documentReset, this, &PmxViewportItem::onDocumentChanged);
-        if (m_controller->undoStack()) {
-            disconnect(m_controller->undoStack(), &QUndoStack::indexChanged, this, &PmxViewportItem::onDocumentChanged);
-        }
-        if (m_controller->selectionManager()) {
-            disconnect(m_controller->selectionManager(), &pmx::PmxSelectionManager::anySelectionChanged, this, &PmxViewportItem::updateGizmoPosition);
-        }
+        disconnect(m_controller, nullptr, this, nullptr);
+    }
+    if (m_undoStack) {
+        disconnect(m_undoStack, nullptr, this, nullptr);
+    }
+    if (m_selectionManager) {
+        disconnect(m_selectionManager, nullptr, this, nullptr);
     }
 
     m_controller = controller;
+    m_undoStack = controller ? controller->undoStack() : nullptr;
+    m_selectionManager = controller ? controller->selectionManager() : nullptr;
 
     if (m_controller) {
         connect(m_controller, &pmx::PmxDocumentController::documentLoaded, this, &PmxViewportItem::onDocumentChanged);
         connect(m_controller, &pmx::PmxDocumentController::documentSaved, this, &PmxViewportItem::onDocumentChanged);
         connect(m_controller, &pmx::PmxDocumentController::documentReset, this, &PmxViewportItem::onDocumentChanged);
-        if (m_controller->undoStack()) {
-            connect(m_controller->undoStack(), &QUndoStack::indexChanged, this, &PmxViewportItem::onDocumentChanged);
-        }
-        if (m_controller->selectionManager()) {
-            connect(m_controller->selectionManager(), &pmx::PmxSelectionManager::anySelectionChanged, this, &PmxViewportItem::updateGizmoPosition);
-        }
+    }
+    if (m_undoStack) {
+        connect(m_undoStack, &QUndoStack::indexChanged, this, &PmxViewportItem::onDocumentChanged);
+    }
+    if (m_selectionManager) {
+        connect(m_selectionManager, &pmx::PmxSelectionManager::anySelectionChanged, this, &PmxViewportItem::updateGizmoPosition);
     }
 
     onDocumentChanged();

@@ -15,6 +15,7 @@
 #include <QWheelEvent>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QPointer>
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
@@ -349,7 +350,9 @@ protected:
     void hoverMoveEvent(QHoverEvent* event) override;
 
 private:
-    pmx::PmxDocumentController* m_controller = nullptr;
+    QPointer<pmx::PmxDocumentController> m_controller;
+    QPointer<QUndoStack> m_undoStack;
+    QPointer<pmx::PmxSelectionManager> m_selectionManager;
     pmx::PmxCamera* m_camera = nullptr;
     quint64 m_modelRevision = 0;
     bool m_showGrid = true;

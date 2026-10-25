@@ -4,7 +4,7 @@ import QtQuick.Layouts
 
 Dialog {
     id: dialog
-    title: bridge.displayLanguage === "Japanese" ? "一括数値演算" : "Batch Math Operation"
+    title: (bridge && bridge.displayLanguage === "Japanese") ? "一括数値演算" : "Batch Math Operation"
     modal: true
     anchors.centerIn: Overlay.overlay
     width: 380
@@ -16,7 +16,7 @@ Dialog {
 
     function populateColumns(tid) {
         tableId = tid;
-        let isJp = bridge.displayLanguage === "Japanese";
+        let isJp = bridge && bridge.displayLanguage === "Japanese";
         let cols = [];
 
         if (tid === 4) { // Vertex
@@ -148,14 +148,14 @@ Dialog {
 
         let targetRows = selectedRows.slice();
         if (targetRows.length === 0) {
-            let total = bridge.rowCount(tableId);
+            let total = bridge ? bridge.rowCount(tableId) : 0;
             targetRows = [];
             for (let i = 0; i < total; ++i) {
                 targetRows.push(i);
             }
         }
 
-        bridge.applyBatchOperation(tableId, targetRows, col, op, val);
+        if (bridge) bridge.applyBatchOperation(tableId, targetRows, col, op, val);
         close();
     }
 
@@ -168,12 +168,12 @@ Dialog {
 
         Label {
             text: {
-                let isJp = bridge.displayLanguage === "Japanese";
+                let isJp = bridge && bridge.displayLanguage === "Japanese";
                 if (dialog.selectedRows.length > 0) {
                     return isJp ? ("対象: 選択中の " + dialog.selectedRows.length + " 行")
                                 : ("Target: " + dialog.selectedRows.length + " selected row(s)");
                 } else {
-                    let total = bridge.rowCount(dialog.tableId);
+                    let total = bridge ? bridge.rowCount(dialog.tableId) : 0;
                     return isJp ? ("対象: 全 " + total + " 行")
                                 : ("Target: All " + total + " rows");
                 }
@@ -187,7 +187,7 @@ Dialog {
             spacing: 8
 
             Label {
-                text: bridge.displayLanguage === "Japanese" ? "対象列:" : "Column:"
+                text: (bridge && bridge.displayLanguage === "Japanese") ? "対象列:" : "Column:"
                 Layout.preferredWidth: 65
             }
 
@@ -204,7 +204,7 @@ Dialog {
             spacing: 8
 
             Label {
-                text: bridge.displayLanguage === "Japanese" ? "演算子:" : "Operation:"
+                text: (bridge && bridge.displayLanguage === "Japanese") ? "演算子:" : "Operation:"
                 Layout.preferredWidth: 65
             }
 
@@ -212,10 +212,10 @@ Dialog {
                 id: operationCombo
                 Layout.fillWidth: true
                 model: [
-                    bridge.displayLanguage === "Japanese" ? "+ (加算)" : "+ (Add)",
-                    bridge.displayLanguage === "Japanese" ? "- (減算)" : "- (Subtract)",
-                    bridge.displayLanguage === "Japanese" ? "* (乗算)" : "* (Multiply)",
-                    bridge.displayLanguage === "Japanese" ? "= (代入)" : "= (Assign)"
+                    (bridge && bridge.displayLanguage === "Japanese") ? "+ (加算)" : "+ (Add)",
+                    (bridge && bridge.displayLanguage === "Japanese") ? "- (減算)" : "- (Subtract)",
+                    (bridge && bridge.displayLanguage === "Japanese") ? "* (乗算)" : "* (Multiply)",
+                    (bridge && bridge.displayLanguage === "Japanese") ? "= (代入)" : "= (Assign)"
                 ]
             }
         }
@@ -225,7 +225,7 @@ Dialog {
             spacing: 8
 
             Label {
-                text: bridge.displayLanguage === "Japanese" ? "演算値:" : "Operand:"
+                text: (bridge && bridge.displayLanguage === "Japanese") ? "演算値:" : "Operand:"
                 Layout.preferredWidth: 65
             }
 
