@@ -6,11 +6,15 @@
 #include "viewport/PmxWeightPaintBrush.h"
 #include "models/PmxDocumentController.h"
 #include "models/PmxUndoCommands.h"
+#include "evaluator/PmxRuntimeScene.h"
+#include "evaluator/PmxAnimationPlayer.h"
 
 #include <QtQuick/qquickrhiitem.h>
 #include <rhi/qrhi.h>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QTimer>
+#include <QElapsedTimer>
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
@@ -46,6 +50,9 @@ struct StagedMaterialBatch {
     glm::vec4 ambient{0.5f, 0.5f, 0.5f, 1.0f};
     glm::vec4 edgeColor{0.0f, 0.0f, 0.0f, 1.0f};
     float edgeSize = 1.0f;
+    glm::vec4 texTintMul{1.0f};
+    glm::vec4 sphereTintMul{1.0f};
+    glm::vec4 toonTintMul{1.0f};
 };
 
 class PmxRhiRenderer : public QQuickRhiItemRenderer {
@@ -58,6 +65,8 @@ public:
     void render(QRhiCommandBuffer* cb) override;
 
     void buildGrid(QRhiCommandBuffer* cb);
+
+    const std::vector<StagedMaterialBatch>& stagedMaterials() const { return m_stagedMaterials; }
 
 private:
 
@@ -156,6 +165,8 @@ private:
     bool m_showEdgeOutlines = true;
     int m_viewportMode = 0;
     quint64 m_syncedRevision = 0;
+    quint64 m_syncedRuntimeRevision = 0;
+    bool m_syncedTransformViewMode = false;
     int m_syncedSelectedBone = -1;
     int m_syncedSelectedRigidBody = -1;
     int m_syncedSelectedJoint = -1;
@@ -181,6 +192,12 @@ class PmxViewportItem : public QQuickRhiItem {
     Q_PROPERTY(float brushStrength READ brushStrength WRITE setBrushStrength NOTIFY brushStrengthChanged)
     Q_PROPERTY(int brushMode READ brushMode WRITE setBrushMode NOTIFY brushModeChanged)
     Q_PROPERTY(int brushFalloff READ brushFalloff WRITE setBrushFalloff NOTIFY brushFalloffChanged)
+    Q_PROPERTY(bool transformViewMode READ isTransformViewMode WRITE setTransformViewMode NOTIFY transformViewModeChanged)
+    Q_PROPERTY(bool isPlaying READ isPlaying NOTIFY playingChanged)
+    Q_PROPERTY(float currentFrame READ currentFrame WRITE setCurrentFrame NOTIFY currentFrameChanged)
+    Q_PROPERTY(int maxFrame READ maxFrame NOTIFY maxFrameChanged)
+    Q_PROPERTY(bool loopPlayback READ loopPlayback WRITE setLoopPlayback NOTIFY loopPlaybackChanged)
+    Q_PROPERTY(bool physicsEnabled READ isPhysicsEnabled WRITE setPhysicsEnabled NOTIFY physicsEnabledChanged)
 
 public:
     explicit PmxViewportItem(QQuickItem* parent = nullptr);
@@ -191,6 +208,7 @@ public:
     static std::vector<uint32_t> filterValidTriangleIndices(const std::vector<int32_t>& rawIndices, size_t vertexCount);
     static std::vector<StagedMaterialBatch> partitionMaterialBatches(const PmxDocument& doc, std::vector<uint32_t>& outStagedIndices);
     static std::vector<MeshVertex> stageVertices(const PmxDocument& doc);
+    static std::vector<MeshVertex> stageDeformedVertices(const PmxDocument& doc, const PmxRuntimeScene& scene);
     static inline glm::vec3 calculateEdgeExtrusion(const glm::vec3& position, const glm::vec3& normal, float edgeSize, float edgeScale) {
         float len = glm::length(normal);
         glm::vec3 safeNorm = (std::isfinite(len) && len > 1e-5f) ? (normal / len) : glm::vec3(0.0f);
@@ -258,6 +276,35 @@ public:
     bool snapEnabled() const { return m_gizmo.snapEnabled(); }
     void setSnapEnabled(bool enabled);
 
+    bool isTransformViewMode() const { return m_transformViewMode; }
+    void setTransformViewMode(bool enabled);
+
+    bool isPlaying() const;
+    float currentFrame() const;
+    void setCurrentFrame(float frame);
+    int maxFrame() const;
+    bool loopPlayback() const;
+    void setLoopPlayback(bool loop);
+
+    bool isPhysicsEnabled() const { return m_physicsEnabled; }
+    void setPhysicsEnabled(bool enabled);
+
+    Q_INVOKABLE bool loadVmdMotion(const QString& filePath);
+    Q_INVOKABLE bool loadVpdPose(const QString& filePath);
+    Q_INVOKABLE void play();
+    Q_INVOKABLE void pause();
+    Q_INVOKABLE void stop();
+    Q_INVOKABLE void resetPhysics();
+    Q_INVOKABLE void resetPose();
+
+    pmx::PmxRuntimeScene& runtimeScene() { return m_runtimeScene; }
+    const pmx::PmxRuntimeScene& runtimeScene() const { return m_runtimeScene; }
+
+    pmx::PmxAnimationPlayer& animationPlayer() { return m_animationPlayer; }
+    const pmx::PmxAnimationPlayer& animationPlayer() const { return m_animationPlayer; }
+
+    quint64 runtimeRevision() const { return m_runtimeRevision; }
+
     PmxGizmo* gizmo() { return &m_gizmo; }
     const PmxGizmo* gizmo() const { return &m_gizmo; }
 
@@ -281,9 +328,18 @@ signals:
     void coordSpaceChanged();
     void symmetricEditingChanged();
     void snapEnabledChanged();
+    void transformViewModeChanged();
+    void playingChanged();
+    void currentFrameChanged();
+    void maxFrameChanged();
+    void loopPlaybackChanged();
+    void physicsEnabledChanged();
 
 public slots:
     void onDocumentChanged();
+
+private slots:
+    void onPlaybackTick();
 
 protected:
     void mousePressEvent(QMouseEvent* event) override;
@@ -307,6 +363,14 @@ private:
     float m_brushStrength = 0.2f;
     int m_brushMode = 0;
     int m_brushFalloff = 0;
+
+    bool m_transformViewMode = false;
+    bool m_physicsEnabled = true;
+    quint64 m_runtimeRevision = 0;
+    pmx::PmxRuntimeScene m_runtimeScene;
+    pmx::PmxAnimationPlayer m_animationPlayer;
+    QTimer* m_playbackTimer = nullptr;
+    QElapsedTimer m_elapsedTimer;
 
     bool m_isPaintingWeights = false;
     int m_paintSessionId = 0;

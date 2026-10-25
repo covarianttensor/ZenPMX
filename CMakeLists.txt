@@ -194,6 +194,7 @@ target_include_directories(PmxViewport PUBLIC
 target_link_libraries(PmxViewport PUBLIC
     PmxCore
     PmxModels
+    PmxEvaluator
     Qt6::Core
     Qt6::Gui
     Qt6::GuiPrivate
@@ -236,6 +237,7 @@ qt_add_qml_module(pmx-editor
     QML_FILES
         src/app/qml/Main.qml
         src/app/qml/InspectorPanel.qml
+        src/app/qml/TimelineBar.qml
         src/app/qml/BatchOperationDialog.qml
         src/app/qml/tabs/InfoTab.qml
         src/app/qml/tabs/VertexTab.qml
@@ -251,6 +253,7 @@ target_link_libraries(pmx-editor PRIVATE
     PmxViewport
     PmxModels
     PmxCore
+    PmxEvaluator
     Qt6::QuickControls2
 )
 
@@ -331,6 +334,7 @@ target_link_libraries(tst_pmx_viewport PRIVATE
     PmxViewport
     PmxModels
     PmxCore
+    PmxEvaluator
     Qt6::Test
     Qt6::Quick
 )

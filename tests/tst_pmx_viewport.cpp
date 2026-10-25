@@ -17,11 +17,16 @@
 #include "viewport/PmxWireframeRenderer.h"
 #include "viewport/PmxWeightPaintBrush.h"
 #include "core/PmxReader.h"
+#include "evaluator/PmxRuntimeScene.h"
+#include "evaluator/PmxAnimationPlayer.h"
+#include "evaluator/VmdImporter.h"
+#include "evaluator/VpdImporter.h"
 
 #include <QSignalSpy>
 #include <QTest>
 #include <QUndoCommand>
 #include <QFile>
+#include <QTemporaryDir>
 #include <rhi/qshader.h>
 #include <cmath>
 #include <limits>
@@ -80,6 +85,12 @@ private slots:
     void testMeshVertexLayoutAlignment();
     void testEdgeExtrusionNormalizationAndClamping();
     void testViewportShowEdgeOutlinesProperty();
+    void testTransformViewModeDeformedMeshUpload();
+    void testTransformViewTimelineScrubbing();
+    void testTransformViewPhysicsToggling();
+    void testTransformViewVmdAndVpdLoading();
+    void testTransformViewBoundarySafety();
+    void testTransformViewMaterialMorphSyncAndRestoration();
 };
 
 void tst_pmx_viewport::testCameraDefaults() {
@@ -2523,6 +2534,473 @@ void tst_pmx_viewport::testViewportShowEdgeOutlinesProperty() {
     viewport.setShowEdgeOutlines(true);
     QCOMPARE(viewport.showEdgeOutlines(), true);
     QCOMPARE(edgeSpy.count(), 2);
+}
+
+void tst_pmx_viewport::testTransformViewModeDeformedMeshUpload() {
+    PmxDocument doc;
+    // 2 bones: bone 0 at (0, 0, 0), bone 1 at (0, 5, 0) child of 0
+    PmxBone b0;
+    b0.nameJp = "Root";
+    b0.position = glm::vec3(0.0f, 0.0f, 0.0f);
+    b0.parentBoneIndex = -1;
+    doc.bones.push_back(b0);
+
+    PmxBone b1;
+    b1.nameJp = "Arm";
+    b1.position = glm::vec3(0.0f, 5.0f, 0.0f);
+    b1.parentBoneIndex = 0;
+    doc.bones.push_back(b1);
+
+    // 2 vertices:
+    // v0: at (0, 5, 0), rigged to bone 1 (BDEF1)
+    PmxVertex v0;
+    v0.position = glm::vec3(0.0f, 5.0f, 0.0f);
+    v0.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+    v0.weightType = WeightType::BDEF1;
+    v0.boneIndices = {1, -1, -1, -1};
+    v0.boneWeights = {1.0f, 0.0f, 0.0f, 0.0f};
+    doc.vertices.push_back(v0);
+
+    // v1: at (1, 0, 0), rigged to bone 0 (BDEF1)
+    PmxVertex v1;
+    v1.position = glm::vec3(1.0f, 0.0f, 0.0f);
+    v1.normal = glm::vec3(1.0f, 0.0f, 0.0f);
+    v1.weightType = WeightType::BDEF1;
+    v1.boneIndices = {0, -1, -1, -1};
+    v1.boneWeights = {1.0f, 0.0f, 0.0f, 0.0f};
+    doc.vertices.push_back(v1);
+
+    // 1 morph: vertex morph on v1 with offset (0, 2, 0)
+    PmxMorph m;
+    m.nameJp = "MoveV1";
+    m.morphType = 1;
+    VertexMorphOffset vo;
+    vo.vertexIndex = 1;
+    vo.positionOffset = glm::vec3(0.0f, 2.0f, 0.0f);
+    m.vertexOffsets.push_back(vo);
+    doc.morphs.push_back(m);
+
+    // 1 material
+    PmxMaterial mat;
+    mat.nameJp = "Mat1";
+    mat.faceVertexCount = 3;
+    doc.materials.push_back(mat);
+    doc.faceIndices = {0, 1, 0};
+
+    PmxDocumentController controller;
+    controller.setDocumentInternal(doc);
+    controller.resetAllModels();
+
+    PmxViewportItem viewport;
+    viewport.setController(&controller);
+
+    QCOMPARE(viewport.isTransformViewMode(), false);
+
+    // Check rest stage vertices
+    auto restVertices = PmxViewportItem::stageVertices(controller.document());
+    QCOMPARE(restVertices.size(), 2u);
+    QCOMPARE(restVertices[0].position.y, 5.0f);
+    QCOMPARE(restVertices[1].position.x, 1.0f);
+    QCOMPARE(restVertices[1].position.y, 0.0f);
+
+    // Switch to TransformView mode
+    QSignalSpy modeSpy(&viewport, &PmxViewportItem::transformViewModeChanged);
+    viewport.setTransformViewMode(true);
+    QCOMPARE(viewport.isTransformViewMode(), true);
+    QCOMPARE(modeSpy.count(), 1);
+
+    // Translate bone 1 by (0, 3, 0) and set morph weight to 0.5
+    viewport.runtimeScene().setBoneTransform(1, glm::vec3(0.0f, 3.0f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    viewport.runtimeScene().setMorphWeight(0, 0.5f);
+    viewport.runtimeScene().evaluate(0.0f);
+
+    // Deformed vertices upload check
+    auto defVertices = PmxViewportItem::stageDeformedVertices(controller.document(), viewport.runtimeScene());
+    QCOMPARE(defVertices.size(), 2u);
+    // v0 moved from y=5 to y=8
+    QVERIFY(std::abs(defVertices[0].position.y - 8.0f) < 1e-4f);
+    // v1 moved by morph offset: y = 0 + 0.5 * 2.0 = 1.0
+    QVERIFY(std::abs(defVertices[1].position.y - 1.0f) < 1e-4f);
+
+    // Bone wireframes dynamic test
+    auto boneLines = PmxWireframeRenderer::buildBoneWireframes(controller.document(), &viewport.runtimeScene(), 1);
+    QVERIFY(!boneLines.empty());
+
+    // Switch back to Edit mode: document rest pose remains untouched
+    viewport.setTransformViewMode(false);
+    QCOMPARE(viewport.isTransformViewMode(), false);
+    QCOMPARE(controller.document().vertices[0].position.y, 5.0f);
+    QCOMPARE(controller.document().vertices[1].position.y, 0.0f);
+}
+
+void tst_pmx_viewport::testTransformViewTimelineScrubbing() {
+    PmxDocument doc;
+    PmxBone b0;
+    b0.nameJp = "Center";
+    b0.position = glm::vec3(0.0f, 0.0f, 0.0f);
+    doc.bones.push_back(b0);
+
+    PmxMorph m0;
+    m0.nameJp = "Smile";
+    m0.morphType = 1;
+    doc.morphs.push_back(m0);
+
+    PmxDocumentController controller;
+    controller.setDocumentInternal(doc);
+    controller.resetAllModels();
+
+    PmxViewportItem viewport;
+    viewport.setController(&controller);
+    viewport.setTransformViewMode(true);
+
+    // Create a simple motion: frame 0 -> frame 30
+    VmdMotion motion;
+    motion.modelName = "Test";
+    motion.maxFrame = 30;
+
+    VmdBoneKeyframe bk0;
+    bk0.boneName = "Center";
+    bk0.frame = 0;
+    bk0.translation = glm::vec3(0.0f);
+    bk0.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+    VmdBoneKeyframe bk1;
+    bk1.boneName = "Center";
+    bk1.frame = 30;
+    bk1.translation = glm::vec3(10.0f, 0.0f, 0.0f);
+    bk1.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+    motion.boneKeyframes = {bk0, bk1};
+
+    VmdMorphKeyframe mk0;
+    mk0.morphName = "Smile";
+    mk0.frame = 0;
+    mk0.weight = 0.0f;
+
+    VmdMorphKeyframe mk1;
+    mk1.morphName = "Smile";
+    mk1.frame = 30;
+    mk1.weight = 1.0f;
+
+    motion.morphKeyframes = {mk0, mk1};
+
+    viewport.animationPlayer().loadMotion(motion);
+    QCOMPARE(viewport.maxFrame(), 30);
+
+    QSignalSpy frameSpy(&viewport, &PmxViewportItem::currentFrameChanged);
+
+    // Scrub to frame 0
+    viewport.setCurrentFrame(0.0f);
+    QCOMPARE(viewport.currentFrame(), 0.0f);
+    QCOMPARE(frameSpy.count(), 1);
+    QVERIFY(std::abs(viewport.runtimeScene().worldPosition(0).x - 0.0f) < 1e-3f);
+    QCOMPARE(viewport.runtimeScene().morphWeight(0), 0.0f);
+
+    // Scrub to frame 30
+    viewport.setCurrentFrame(30.0f);
+    QCOMPARE(viewport.currentFrame(), 30.0f);
+    QCOMPARE(frameSpy.count(), 2);
+    QVERIFY(std::abs(viewport.runtimeScene().worldPosition(0).x - 10.0f) < 1e-3f);
+    QCOMPARE(viewport.runtimeScene().morphWeight(0), 1.0f);
+
+    // Scrub to frame 15 (midpoint)
+    viewport.setCurrentFrame(15.0f);
+    QCOMPARE(viewport.currentFrame(), 15.0f);
+    // Interpolated translation should be active
+    QVERIFY(viewport.runtimeScene().worldPosition(0).x > 1.0f);
+    QVERIFY(viewport.runtimeScene().worldPosition(0).x < 9.0f);
+    QVERIFY(viewport.runtimeScene().morphWeight(0) > 0.1f);
+}
+
+void tst_pmx_viewport::testTransformViewPhysicsToggling() {
+    PmxDocument doc;
+    PmxBone b0;
+    b0.nameJp = "Base";
+    b0.position = glm::vec3(0.0f, 10.0f, 0.0f);
+    doc.bones.push_back(b0);
+
+    PmxRigidBody rb0;
+    rb0.nameJp = "Body0";
+    rb0.boneIndex = 0;
+    rb0.physicsMode = 1; // Dynamic
+    rb0.shape = 0; // Sphere
+    rb0.size = glm::vec3(1.0f);
+    rb0.position = glm::vec3(0.0f, 10.0f, 0.0f);
+    rb0.mass = 1.0f;
+    doc.rigidBodies.push_back(rb0);
+
+    PmxJoint j0;
+    j0.nameJp = "Joint0";
+    j0.rigidBodyIndexA = 0;
+    j0.rigidBodyIndexB = -1;
+    j0.position = glm::vec3(0.0f, 10.0f, 0.0f);
+    doc.joints.push_back(j0);
+
+    PmxDocumentController controller;
+    controller.setDocumentInternal(doc);
+    controller.resetAllModels();
+
+    PmxViewportItem viewport;
+    viewport.setController(&controller);
+    viewport.setTransformViewMode(true);
+
+    QCOMPARE(viewport.isPhysicsEnabled(), true);
+
+    QSignalSpy physSpy(&viewport, &PmxViewportItem::physicsEnabledChanged);
+    viewport.setPhysicsEnabled(false);
+    QCOMPARE(viewport.isPhysicsEnabled(), false);
+    QCOMPARE(physSpy.count(), 1);
+    QCOMPARE(viewport.runtimeScene().isPhysicsEnabled(), false);
+
+    viewport.setPhysicsEnabled(true);
+    QCOMPARE(viewport.isPhysicsEnabled(), true);
+    QCOMPARE(physSpy.count(), 2);
+    QCOMPARE(viewport.runtimeScene().isPhysicsEnabled(), true);
+
+    // Test wireframe building with dynamic scene
+    auto rbLines = PmxWireframeRenderer::buildRigidBodyWireframes(doc, &viewport.runtimeScene(), 0);
+    QVERIFY(!rbLines.empty());
+
+    auto jointLines = PmxWireframeRenderer::buildJointWireframes(doc, &viewport.runtimeScene(), 0);
+    QVERIFY(!jointLines.empty());
+
+    // Reset physics and reset pose methods
+    viewport.resetPhysics();
+    viewport.resetPose();
+    QVERIFY(std::abs(viewport.runtimeScene().worldPosition(0).y - 10.0f) < 1e-4f);
+}
+
+void tst_pmx_viewport::testTransformViewVmdAndVpdLoading() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    // Create and write a test VMD
+    VmdMotion motion;
+    motion.version = "Vocaloid Motion Data 0002";
+    motion.modelName = "TestModel";
+    motion.maxFrame = 60;
+    VmdBoneKeyframe bk;
+    bk.boneName = "Root";
+    bk.frame = 60;
+    bk.translation = glm::vec3(5.0f, 0.0f, 0.0f);
+    motion.boneKeyframes.push_back(bk);
+
+    QString vmdPath = tempDir.filePath("motion.vmd");
+    QString vmdErr;
+    QVERIFY(VmdImporter::writeToFile(vmdPath, motion, &vmdErr));
+
+    // Create and write a test VPD
+    VpdPose pose;
+    pose.modelName = "TestModel";
+    VpdBonePose bp;
+    bp.boneName = "Root";
+    bp.translation = glm::vec3(2.0f, 1.0f, 0.0f);
+    pose.bones.push_back(bp);
+
+    QString vpdPath = tempDir.filePath("pose.vpd");
+    QString vpdErr;
+    QVERIFY(VpdImporter::writeToFile(vpdPath, pose, &vpdErr));
+
+    PmxViewportItem viewport;
+    PmxDocument doc;
+    PmxBone b;
+    b.nameJp = "Root";
+    doc.bones.push_back(b);
+    PmxDocumentController controller;
+    controller.setDocumentInternal(doc);
+    controller.resetAllModels();
+    viewport.setController(&controller);
+    viewport.setTransformViewMode(true);
+
+    // Load VMD
+    QSignalSpy maxFrameSpy(&viewport, &PmxViewportItem::maxFrameChanged);
+    QVERIFY(viewport.loadVmdMotion(vmdPath));
+    QCOMPARE(viewport.maxFrame(), 60);
+    QVERIFY(maxFrameSpy.count() >= 1);
+
+    // Test playback controls
+    QSignalSpy playSpy(&viewport, &PmxViewportItem::playingChanged);
+    viewport.play();
+    QVERIFY(viewport.isPlaying());
+    QCOMPARE(playSpy.count(), 1);
+
+    viewport.pause();
+    QVERIFY(!viewport.isPlaying());
+    QCOMPARE(playSpy.count(), 2);
+
+    viewport.play();
+    viewport.stop();
+    QVERIFY(!viewport.isPlaying());
+    QCOMPARE(viewport.currentFrame(), 0.0f);
+
+    // Loop toggle
+    QSignalSpy loopSpy(&viewport, &PmxViewportItem::loopPlaybackChanged);
+    viewport.setLoopPlayback(true);
+    QCOMPARE(viewport.loopPlayback(), true);
+    QCOMPARE(loopSpy.count(), 1);
+
+    // Load VPD (file:// URL scheme support)
+    QUrl vpdUrl = QUrl::fromLocalFile(vpdPath);
+    QVERIFY(viewport.loadVpdPose(vpdUrl.toString()));
+    QCOMPARE(viewport.maxFrame(), 0);
+}
+
+void tst_pmx_viewport::testTransformViewBoundarySafety() {
+    PmxViewportItem viewport;
+
+    // Safety without controller
+    QCOMPARE(viewport.controller(), nullptr);
+    QCOMPARE(viewport.isTransformViewMode(), false);
+    viewport.setTransformViewMode(true);
+    QCOMPARE(viewport.isTransformViewMode(), true);
+
+    viewport.play();
+    viewport.pause();
+    viewport.stop();
+    viewport.resetPhysics();
+    viewport.resetPose();
+
+    // Invalid file paths
+    QCOMPARE(viewport.loadVmdMotion(""), false);
+    QCOMPARE(viewport.loadVmdMotion("/path/to/nonexistent_file_xyz.vmd"), false);
+    QCOMPARE(viewport.loadVpdPose(""), false);
+    QCOMPARE(viewport.loadVpdPose("/path/to/nonexistent_file_xyz.vpd"), false);
+
+    // NaN / Inf / negative frame scrubbing
+    viewport.setCurrentFrame(std::numeric_limits<float>::quiet_NaN());
+    QCOMPARE(viewport.currentFrame(), 0.0f);
+
+    viewport.setCurrentFrame(std::numeric_limits<float>::infinity());
+    QVERIFY(std::isfinite(viewport.currentFrame()));
+
+    viewport.setCurrentFrame(-100.0f);
+    QCOMPARE(viewport.currentFrame(), 0.0f);
+
+    // Empty document safety
+    PmxDocument emptyDoc;
+    PmxDocumentController controller;
+    controller.setDocumentInternal(emptyDoc);
+    controller.resetAllModels();
+    viewport.setController(&controller);
+
+    auto staged = PmxViewportItem::stageDeformedVertices(emptyDoc, viewport.runtimeScene());
+    QVERIFY(staged.empty());
+
+    auto boneLines = PmxWireframeRenderer::buildBoneWireframes(emptyDoc, &viewport.runtimeScene());
+    QVERIFY(boneLines.empty());
+
+    auto rbLines = PmxWireframeRenderer::buildRigidBodyWireframes(emptyDoc, &viewport.runtimeScene());
+    QVERIFY(rbLines.empty());
+
+    auto jointLines = PmxWireframeRenderer::buildJointWireframes(emptyDoc, &viewport.runtimeScene());
+    QVERIFY(jointLines.empty());
+
+    // Detach controller
+    viewport.setController(nullptr);
+    QCOMPARE(viewport.controller(), nullptr);
+}
+
+void tst_pmx_viewport::testTransformViewMaterialMorphSyncAndRestoration() {
+    PmxDocument doc;
+
+    // 1. Setup Material 0
+    PmxMaterial mat;
+    mat.nameJp = "BodyMat";
+    mat.diffuse = glm::vec4(0.8f, 0.6f, 0.4f, 1.0f);
+    mat.specular = glm::vec3(0.5f, 0.5f, 0.5f);
+    mat.specularPower = 10.0f;
+    mat.ambient = glm::vec3(0.3f, 0.3f, 0.3f);
+    mat.edgeColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    mat.edgeSize = 1.2f;
+    mat.faceVertexCount = 3;
+    doc.materials.push_back(mat);
+
+    // 3 vertices forming a triangle
+    PmxVertex v0, v1, v2;
+    v0.position = glm::vec3(0.0f, 0.0f, 0.0f);
+    v1.position = glm::vec3(1.0f, 0.0f, 0.0f);
+    v2.position = glm::vec3(0.0f, 1.0f, 0.0f);
+    doc.vertices = {v0, v1, v2};
+    doc.faceIndices = {0, 1, 2};
+
+    // Material morph 0: Multiply pass
+    PmxMorph mm;
+    mm.nameJp = "MatTint";
+    mm.morphType = 8; // Material morph
+    MaterialMorphOffset off;
+    off.materialIndex = 0;
+    off.opType = 0; // Multiply
+    off.diffuse = glm::vec4(0.5f, 0.5f, 0.5f, 0.8f);
+    off.specular = glm::vec3(0.2f, 0.2f, 0.2f);
+    off.specularPower = 2.0f;
+    off.ambient = glm::vec3(0.4f, 0.4f, 0.4f);
+    off.edgeColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.5f);
+    off.edgeSize = 1.5f;
+    off.textureTint = glm::vec4(0.7f, 0.7f, 0.7f, 1.0f);
+    off.sphereTint = glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
+    off.toonTint = glm::vec4(0.6f, 0.6f, 0.6f, 1.0f);
+    mm.materialOffsets.push_back(off);
+    doc.morphs.push_back(mm);
+
+    PmxDocumentController controller;
+    controller.setDocumentInternal(doc);
+    controller.resetAllModels();
+
+    PmxViewportItem viewport;
+    viewport.setController(&controller);
+
+    PmxRhiRenderer renderer;
+
+    // A. Edit Mode (transformViewMode == false)
+    renderer.synchronize(&viewport);
+    QCOMPARE(renderer.stagedMaterials().size(), 1u);
+    const auto& restBatch = renderer.stagedMaterials()[0];
+    QCOMPARE(restBatch.diffuse, doc.materials[0].diffuse);
+    QCOMPARE(restBatch.specular, glm::vec4(doc.materials[0].specular, doc.materials[0].specularPower));
+    QCOMPARE(restBatch.ambient, glm::vec4(doc.materials[0].ambient, 1.0f));
+    QCOMPARE(restBatch.edgeColor, doc.materials[0].edgeColor);
+    QCOMPARE(restBatch.edgeSize, doc.materials[0].edgeSize);
+    QCOMPARE(restBatch.texTintMul, glm::vec4(1.0f));
+    QCOMPARE(restBatch.sphereTintMul, glm::vec4(1.0f));
+    QCOMPARE(restBatch.toonTintMul, glm::vec4(1.0f));
+
+    // B. Switch to TransformView Mode with 100% material morph
+    viewport.setTransformViewMode(true);
+    viewport.runtimeScene().setMorphWeight(0, 1.0f);
+    viewport.runtimeScene().evaluate(0.0f);
+    renderer.synchronize(&viewport);
+
+    // Requirement 1: Verify material morph parameters are synchronized into m_stagedMaterials
+    QCOMPARE(renderer.stagedMaterials().size(), 1u);
+    const auto& morphedBatch = renderer.stagedMaterials()[0];
+    QVERIFY(std::abs(morphedBatch.diffuse.r - 0.4f) < 1e-4f);
+    QVERIFY(std::abs(morphedBatch.diffuse.g - 0.3f) < 1e-4f);
+    QVERIFY(std::abs(morphedBatch.diffuse.b - 0.2f) < 1e-4f);
+    QVERIFY(std::abs(morphedBatch.diffuse.a - 0.8f) < 1e-4f);
+    QVERIFY(std::abs(morphedBatch.specular.x - 0.1f) < 1e-4f);
+    QVERIFY(std::abs(morphedBatch.specular.w - 20.0f) < 1e-4f);
+    QVERIFY(std::abs(morphedBatch.ambient.r - 0.12f) < 1e-4f);
+    QVERIFY(std::abs(morphedBatch.edgeColor.a - 0.5f) < 1e-4f);
+    QVERIFY(std::abs(morphedBatch.edgeSize - 1.8f) < 1e-4f);
+    QVERIFY(std::abs(morphedBatch.texTintMul.r - 0.7f) < 1e-4f);
+    QVERIFY(std::abs(morphedBatch.sphereTintMul.r - 0.9f) < 1e-4f);
+    QVERIFY(std::abs(morphedBatch.toonTintMul.r - 0.6f) < 1e-4f);
+
+    // C. Switch back to Edit Mode (transformViewMode == false)
+    viewport.setTransformViewMode(false);
+    renderer.synchronize(&viewport);
+
+    // Requirement 2: When transformViewMode is toggled back to false, m_stagedMaterials restores to exact rest-pose properties
+    QCOMPARE(renderer.stagedMaterials().size(), 1u);
+    const auto& restoredBatch = renderer.stagedMaterials()[0];
+    QCOMPARE(restoredBatch.diffuse, doc.materials[0].diffuse);
+    QCOMPARE(restoredBatch.specular, glm::vec4(doc.materials[0].specular, doc.materials[0].specularPower));
+    QCOMPARE(restoredBatch.ambient, glm::vec4(doc.materials[0].ambient, 1.0f));
+    QCOMPARE(restoredBatch.edgeColor, doc.materials[0].edgeColor);
+    QCOMPARE(restoredBatch.edgeSize, doc.materials[0].edgeSize);
+    QCOMPARE(restoredBatch.texTintMul, glm::vec4(1.0f));
+    QCOMPARE(restoredBatch.sphereTintMul, glm::vec4(1.0f));
+    QCOMPARE(restoredBatch.toonTintMul, glm::vec4(1.0f));
 }
 
 QTEST_MAIN(tst_pmx_viewport)

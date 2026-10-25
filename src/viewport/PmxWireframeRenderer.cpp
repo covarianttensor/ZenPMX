@@ -1,5 +1,7 @@
 #include "viewport/PmxWireframeRenderer.h"
 #include "viewport/PmxCamera.h"
+#include "evaluator/PmxRuntimeScene.h"
+#include "evaluator/PmxPhysicsEngine.h"
 
 #include <cmath>
 #include <algorithm>
@@ -27,6 +29,10 @@ inline glm::mat3 makeEulerRotationMatrix(const glm::vec3& pmxEuler) {
 } // namespace
 
 std::vector<LineVertex> PmxWireframeRenderer::buildBoneWireframes(const PmxDocument& doc, int selectedBoneIndex) {
+    return buildBoneWireframes(doc, nullptr, selectedBoneIndex);
+}
+
+std::vector<LineVertex> PmxWireframeRenderer::buildBoneWireframes(const PmxDocument& doc, const PmxRuntimeScene* scene, int selectedBoneIndex) {
     std::vector<LineVertex> lines;
     if (doc.bones.empty()) {
         return lines;
@@ -41,21 +47,37 @@ std::vector<LineVertex> PmxWireframeRenderer::buildBoneWireframes(const PmxDocum
             continue;
         }
 
-        const glm::vec3 pHead = PmxCamera::toRightHanded(b.position);
+        glm::vec3 pHead;
+        if (scene && static_cast<int>(i) < scene->boneCount()) {
+            pHead = scene->worldPosition(static_cast<int>(i));
+        } else {
+            pHead = PmxCamera::toRightHanded(b.position);
+        }
+
         glm::vec3 pTail = pHead;
         bool hasValidTail = false;
 
         if ((b.boneFlags & 0x0001) != 0) { // Tail is bone
             if (b.tailBoneIndex >= 0 && static_cast<size_t>(b.tailBoneIndex) < doc.bones.size() &&
                 b.tailBoneIndex != static_cast<int>(i)) {
-                const auto& child = doc.bones[static_cast<size_t>(b.tailBoneIndex)];
-                if (isVec3Finite(child.position)) {
-                    pTail = PmxCamera::toRightHanded(child.position);
+                if (scene && b.tailBoneIndex < scene->boneCount()) {
+                    pTail = scene->worldPosition(b.tailBoneIndex);
                     hasValidTail = true;
+                } else {
+                    const auto& child = doc.bones[static_cast<size_t>(b.tailBoneIndex)];
+                    if (isVec3Finite(child.position)) {
+                        pTail = PmxCamera::toRightHanded(child.position);
+                        hasValidTail = true;
+                    }
                 }
             }
         } else if (isVec3Finite(b.tailOffset) && glm::length(b.tailOffset) > 0.001f) {
-            pTail = PmxCamera::toRightHanded(b.position + b.tailOffset);
+            if (scene && static_cast<int>(i) < scene->boneCount()) {
+                glm::vec3 restTailRH = PmxCamera::toRightHanded(b.position + b.tailOffset);
+                pTail = glm::vec3(scene->skinningMatrix(static_cast<int>(i)) * glm::vec4(restTailRH, 1.0f));
+            } else {
+                pTail = PmxCamera::toRightHanded(b.position + b.tailOffset);
+            }
             hasValidTail = true;
         }
 
@@ -66,9 +88,14 @@ std::vector<LineVertex> PmxWireframeRenderer::buildBoneWireframes(const PmxDocum
         // Connecting line from parent head to bone head
         if (b.parentBoneIndex >= 0 && static_cast<size_t>(b.parentBoneIndex) < doc.bones.size() &&
             b.parentBoneIndex != static_cast<int>(i)) {
-            const auto& parentBone = doc.bones[static_cast<size_t>(b.parentBoneIndex)];
-            if (isVec3Finite(parentBone.position)) {
-                glm::vec3 pParent = PmxCamera::toRightHanded(parentBone.position);
+            glm::vec3 pParent;
+            if (scene && b.parentBoneIndex < scene->boneCount()) {
+                pParent = scene->worldPosition(b.parentBoneIndex);
+            } else {
+                const auto& parentBone = doc.bones[static_cast<size_t>(b.parentBoneIndex)];
+                pParent = PmxCamera::toRightHanded(parentBone.position);
+            }
+            if (isVec3Finite(pParent)) {
                 lines.push_back({ pParent, boneColor });
                 lines.push_back({ pHead, boneColor });
             }
@@ -111,12 +138,16 @@ std::vector<LineVertex> PmxWireframeRenderer::buildBoneWireframes(const PmxDocum
         } else {
             // Localized octahedron of radius 0.2f centered at pHead
             const float r = 0.2f;
-            glm::vec3 top = pHead + glm::vec3(0.0f, r, 0.0f);
-            glm::vec3 bot = pHead - glm::vec3(0.0f, r, 0.0f);
-            glm::vec3 r0 = pHead + glm::vec3(r, 0.0f, 0.0f);
-            glm::vec3 r1 = pHead + glm::vec3(0.0f, 0.0f, r);
-            glm::vec3 r2 = pHead - glm::vec3(r, 0.0f, 0.0f);
-            glm::vec3 r3 = pHead - glm::vec3(0.0f, 0.0f, r);
+            glm::mat3 R(1.0f);
+            if (scene && static_cast<int>(i) < scene->boneCount()) {
+                R = glm::mat3(scene->worldMatrix(static_cast<int>(i)));
+            }
+            glm::vec3 top = pHead + R * glm::vec3(0.0f, r, 0.0f);
+            glm::vec3 bot = pHead - R * glm::vec3(0.0f, r, 0.0f);
+            glm::vec3 r0 = pHead + R * glm::vec3(r, 0.0f, 0.0f);
+            glm::vec3 r1 = pHead + R * glm::vec3(0.0f, 0.0f, r);
+            glm::vec3 r2 = pHead - R * glm::vec3(r, 0.0f, 0.0f);
+            glm::vec3 r3 = pHead - R * glm::vec3(0.0f, 0.0f, r);
 
             // 4 lines from top to ring
             lines.push_back({ top, boneColor }); lines.push_back({ r0, boneColor });
@@ -142,6 +173,10 @@ std::vector<LineVertex> PmxWireframeRenderer::buildBoneWireframes(const PmxDocum
 }
 
 std::vector<LineVertex> PmxWireframeRenderer::buildRigidBodyWireframes(const PmxDocument& doc, int selectedRigidBodyIndex) {
+    return buildRigidBodyWireframes(doc, nullptr, selectedRigidBodyIndex);
+}
+
+std::vector<LineVertex> PmxWireframeRenderer::buildRigidBodyWireframes(const PmxDocument& doc, const PmxRuntimeScene* scene, int selectedRigidBodyIndex) {
     std::vector<LineVertex> lines;
     if (doc.rigidBodies.empty()) {
         return lines;
@@ -155,8 +190,27 @@ std::vector<LineVertex> PmxWireframeRenderer::buildRigidBodyWireframes(const Pmx
             continue;
         }
 
-        const glm::vec3 p = PmxCamera::toRightHanded(rb.position);
-        const glm::mat3 R = makeEulerRotationMatrix(rb.rotation);
+        glm::vec3 p = PmxCamera::toRightHanded(rb.position);
+        glm::mat3 R = makeEulerRotationMatrix(rb.rotation);
+
+        if (scene && scene->physicsEngine() && static_cast<int>(i) < scene->physicsEngine()->rigidBodyCount()) {
+            const auto* pe = scene->physicsEngine();
+            glm::mat4 bodyWorld;
+            if (scene->isPhysicsEnabled()) {
+                bodyWorld = pe->rigidBodyTransform(static_cast<int>(i));
+            } else {
+                const auto* meta = pe->runtimeRigidBody(static_cast<int>(i));
+                if (meta && meta->boneIndex >= 0 && meta->boneIndex < scene->boneCount()) {
+                    bodyWorld = scene->worldMatrix(meta->boneIndex) * meta->boneToBodyOffset;
+                } else if (meta) {
+                    bodyWorld = meta->restTransform;
+                } else {
+                    bodyWorld = pe->rigidBodyTransform(static_cast<int>(i));
+                }
+            }
+            p = glm::vec3(bodyWorld[3]);
+            R = glm::mat3(bodyWorld);
+        }
 
         glm::vec4 color;
         if (static_cast<int>(i) == selectedRigidBodyIndex) {
@@ -311,6 +365,10 @@ std::vector<LineVertex> PmxWireframeRenderer::buildRigidBodyWireframes(const Pmx
 }
 
 std::vector<LineVertex> PmxWireframeRenderer::buildJointWireframes(const PmxDocument& doc, int selectedJointIndex) {
+    return buildJointWireframes(doc, nullptr, selectedJointIndex);
+}
+
+std::vector<LineVertex> PmxWireframeRenderer::buildJointWireframes(const PmxDocument& doc, const PmxRuntimeScene* scene, int selectedJointIndex) {
     std::vector<LineVertex> lines;
     if (doc.joints.empty()) {
         return lines;
@@ -324,8 +382,22 @@ std::vector<LineVertex> PmxWireframeRenderer::buildJointWireframes(const PmxDocu
             continue;
         }
 
-        const glm::vec3 p = PmxCamera::toRightHanded(j.position);
-        const glm::mat3 R = makeEulerRotationMatrix(j.rotation);
+        glm::vec3 p = PmxCamera::toRightHanded(j.position);
+        glm::mat3 R = makeEulerRotationMatrix(j.rotation);
+
+        if (scene && scene->physicsEngine() && static_cast<int>(i) < scene->physicsEngine()->constraintCount()) {
+            const auto* pe = scene->physicsEngine();
+            auto* constraint = pe->constraint(static_cast<int>(i));
+            if (constraint && j.rigidBodyIndexA >= 0 && j.rigidBodyIndexA < pe->rigidBodyCount()) {
+                auto* bodyA = pe->rigidBody(j.rigidBodyIndexA);
+                if (bodyA) {
+                    btTransform dynamicJointTrans = bodyA->getWorldTransform() * constraint->getFrameOffsetA();
+                    glm::mat4 jointMat = PmxPhysicsEngine::btTransformToGlm(dynamicJointTrans);
+                    p = glm::vec3(jointMat[3]);
+                    R = glm::mat3(jointMat);
+                }
+            }
+        }
 
         const bool isSelected = (static_cast<int>(i) == selectedJointIndex);
 
@@ -402,18 +474,26 @@ std::vector<LineVertex> PmxWireframeRenderer::buildJointWireframes(const PmxDocu
             : glm::vec4(0.85f, 0.2f, 0.85f, 0.8f);
 
         if (j.rigidBodyIndexA >= 0 && static_cast<size_t>(j.rigidBodyIndexA) < doc.rigidBodies.size()) {
-            const auto& rbA = doc.rigidBodies[static_cast<size_t>(j.rigidBodyIndexA)];
-            if (isVec3Finite(rbA.position)) {
-                glm::vec3 pA = PmxCamera::toRightHanded(rbA.position);
+            glm::vec3 pA;
+            if (scene && scene->physicsEngine() && j.rigidBodyIndexA < scene->physicsEngine()->rigidBodyCount()) {
+                pA = scene->physicsEngine()->rigidBodyPosition(j.rigidBodyIndexA);
+            } else {
+                pA = PmxCamera::toRightHanded(doc.rigidBodies[static_cast<size_t>(j.rigidBodyIndexA)].position);
+            }
+            if (isVec3Finite(pA)) {
                 lines.push_back({ p, anchorColor });
                 lines.push_back({ pA, anchorColor });
             }
         }
 
         if (j.rigidBodyIndexB >= 0 && static_cast<size_t>(j.rigidBodyIndexB) < doc.rigidBodies.size()) {
-            const auto& rbB = doc.rigidBodies[static_cast<size_t>(j.rigidBodyIndexB)];
-            if (isVec3Finite(rbB.position)) {
-                glm::vec3 pB = PmxCamera::toRightHanded(rbB.position);
+            glm::vec3 pB;
+            if (scene && scene->physicsEngine() && j.rigidBodyIndexB < scene->physicsEngine()->rigidBodyCount()) {
+                pB = scene->physicsEngine()->rigidBodyPosition(j.rigidBodyIndexB);
+            } else {
+                pB = PmxCamera::toRightHanded(doc.rigidBodies[static_cast<size_t>(j.rigidBodyIndexB)].position);
+            }
+            if (isVec3Finite(pB)) {
                 lines.push_back({ p, anchorColor });
                 lines.push_back({ pB, anchorColor });
             }

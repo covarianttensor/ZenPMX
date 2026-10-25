@@ -1,11 +1,14 @@
 #include "viewport/PmxViewportItem.h"
 #include "viewport/PmxWireframeRenderer.h"
 #include "models/PmxUndoCommands.h"
+#include "evaluator/VmdImporter.h"
+#include "evaluator/VpdImporter.h"
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
 #include <QDebug>
 #include <QMatrix4x4>
+#include <QUrl>
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -15,6 +18,10 @@ inline void initShaders() {
 }
 
 namespace pmx {
+
+inline bool isVec3Finite(const glm::vec3& v) {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
 
 static QShader loadShaderFromResource(const QString& name) {
     initShaders();
@@ -289,6 +296,8 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
     m_showEdgeOutlines = vp->showEdgeOutlines();
     bool modeChanged = (m_viewportMode != vp->viewportMode());
     m_viewportMode = vp->viewportMode();
+    bool transformViewChanged = (m_syncedTransformViewMode != vp->isTransformViewMode());
+    m_syncedTransformViewMode = vp->isTransformViewMode();
 
     int selBone = -1;
     int selRb = -1;
@@ -303,19 +312,21 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
         if (!joints.isEmpty()) selJoint = joints.first();
     }
 
-    if (m_syncedRevision != vp->modelRevision() ||
+    bool runtimeDirty = (m_syncedTransformViewMode && m_syncedRuntimeRevision != vp->runtimeRevision());
+    bool docDirty = (m_syncedRevision != vp->modelRevision());
+
+    if (docDirty || runtimeDirty || transformViewChanged ||
         m_syncedSelectedBone != selBone ||
         m_syncedSelectedRigidBody != selRb ||
         m_syncedSelectedJoint != selJoint ||
         modeChanged) {
         m_syncedRevision = vp->modelRevision();
+        m_syncedRuntimeRevision = vp->runtimeRevision();
         m_syncedSelectedBone = selBone;
         m_syncedSelectedRigidBody = selRb;
         m_syncedSelectedJoint = selJoint;
 
         m_stagedVertices.clear();
-        m_stagedIndices.clear();
-        m_stagedMaterials.clear();
         m_stagedBoneLines.clear();
         m_stagedPhysicsLines.clear();
         m_stagedJointLines.clear();
@@ -323,12 +334,39 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
 
         if (vp->controller()) {
             const auto& doc = vp->controller()->document();
-            m_stagedVertices = PmxViewportItem::stageVertices(doc);
-            m_stagedMaterials = PmxViewportItem::partitionMaterialBatches(doc, m_stagedIndices);
+            if (m_syncedTransformViewMode) {
+                m_stagedVertices = PmxViewportItem::stageDeformedVertices(doc, vp->runtimeScene());
+                m_stagedBoneLines = PmxWireframeRenderer::buildBoneWireframes(doc, &vp->runtimeScene(), selBone);
+                m_stagedPhysicsLines = PmxWireframeRenderer::buildRigidBodyWireframes(doc, &vp->runtimeScene(), selRb);
+                m_stagedJointLines = PmxWireframeRenderer::buildJointWireframes(doc, &vp->runtimeScene(), selJoint);
+            } else {
+                m_stagedVertices = PmxViewportItem::stageVertices(doc);
+                m_stagedBoneLines = PmxWireframeRenderer::buildBoneWireframes(doc, nullptr, selBone);
+                m_stagedPhysicsLines = PmxWireframeRenderer::buildRigidBodyWireframes(doc, nullptr, selRb);
+                m_stagedJointLines = PmxWireframeRenderer::buildJointWireframes(doc, nullptr, selJoint);
+            }
 
-            m_stagedBoneLines = PmxWireframeRenderer::buildBoneWireframes(doc, selBone);
-            m_stagedPhysicsLines = PmxWireframeRenderer::buildRigidBodyWireframes(doc, selRb);
-            m_stagedJointLines = PmxWireframeRenderer::buildJointWireframes(doc, selJoint);
+            if (docDirty || transformViewChanged || m_stagedMaterials.empty()) {
+                m_stagedMaterials = PmxViewportItem::partitionMaterialBatches(doc, m_stagedIndices);
+                m_materialsDirty = true;
+            }
+
+            if (m_syncedTransformViewMode) {
+                const auto& emList = vp->runtimeScene().evaluatedMaterials();
+                for (auto& batch : m_stagedMaterials) {
+                    if (batch.materialIndex >= 0 && static_cast<size_t>(batch.materialIndex) < emList.size()) {
+                        const auto& em = emList[static_cast<size_t>(batch.materialIndex)];
+                        batch.diffuse = em.diffuse;
+                        batch.specular = glm::vec4(em.specular, em.specularPower);
+                        batch.ambient = glm::vec4(em.ambient, 1.0f);
+                        batch.edgeColor = em.edgeColor;
+                        batch.edgeSize = em.edgeSize;
+                        batch.texTintMul = em.textureTint;
+                        batch.sphereTintMul = em.sphereTint;
+                        batch.toonTintMul = em.toonTint;
+                    }
+                }
+            }
 
             m_stagedHeatmapVertices.reserve(doc.vertices.size());
             for (const auto& v : doc.vertices) {
@@ -339,18 +377,17 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
         }
 
         m_meshDataDirty = true;
-        m_materialsDirty = true;
         m_heatmapDirty = true;
     }
 
     m_stagedGizmoLines.clear();
-    if (vp->gizmo()->mode() != GizmoMode::None && m_viewportMode != 2) {
+    if (!m_syncedTransformViewMode && vp->gizmo()->mode() != GizmoMode::None && m_viewportMode != 2) {
         float gizmoScale = vp->gizmo()->computeDisplayScale(m_eyePos);
         m_stagedGizmoLines = vp->gizmo()->buildGizmoGeometry(gizmoScale);
     }
     m_gizmoDirty = true;
 
-    m_stagedBrushCursorLines = vp->brushCursorLines();
+    m_stagedBrushCursorLines = m_syncedTransformViewMode ? std::vector<LineVertex>{} : vp->brushCursorLines();
     m_brushCursorDirty = true;
 }
 
@@ -544,6 +581,10 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
     glm::mat4 normalMatrix = glm::transpose(glm::inverse(m_viewMatrix));
     glm::vec4 lightDir = glm::normalize(m_viewMatrix * glm::vec4(0.5f, 1.0f, 0.5f, 0.0f));
 
+    for (size_t i = 0; i < m_gpuBatches.size() && i < m_stagedMaterials.size(); ++i) {
+        m_gpuBatches[i].staged = m_stagedMaterials[i];
+    }
+
     for (auto& gb : m_gpuBatches) {
         FrameAndMaterialUboData uboData;
         uboData.mvp = mvp;
@@ -563,11 +604,11 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
             static_cast<float>(gb.staged.sphereMode),
             gb.staged.hasToon ? 1.0f : 0.0f
         );
-        uboData.texTintMul = glm::vec4(1.0f);
+        uboData.texTintMul = gb.staged.texTintMul;
         uboData.texTintAdd = glm::vec4(0.0f);
-        uboData.sphereTintMul = glm::vec4(1.0f);
+        uboData.sphereTintMul = gb.staged.sphereTintMul;
         uboData.sphereTintAdd = glm::vec4(0.0f);
-        uboData.toonTintMul = glm::vec4(1.0f);
+        uboData.toonTintMul = gb.staged.toonTintMul;
         uboData.toonTintAdd = glm::vec4(0.0f);
 
         u->updateDynamicBuffer(gb.ubo, 0, sizeof(uboData), &uboData);
@@ -689,12 +730,21 @@ PmxViewportItem::PmxViewportItem(QQuickItem* parent)
     setAcceptedMouseButtons(Qt::AllButtons);
     setAcceptHoverEvents(true);
 
+    m_playbackTimer = new QTimer(this);
+    m_playbackTimer->setInterval(16);
+    m_playbackTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_playbackTimer, &QTimer::timeout, this, &PmxViewportItem::onPlaybackTick);
+
     connect(m_camera, &PmxCamera::cameraChanged, this, [this]() {
         update();
     });
 }
 
-PmxViewportItem::~PmxViewportItem() = default;
+PmxViewportItem::~PmxViewportItem() {
+    if (m_playbackTimer) {
+        m_playbackTimer->stop();
+    }
+}
 
 QQuickRhiItemRenderer* PmxViewportItem::createRenderer() {
     return new PmxRhiRenderer();
@@ -739,6 +789,47 @@ std::vector<MeshVertex> PmxViewportItem::stageVertices(const PmxDocument& doc) {
         }
         mv.uv = v.uv;
         mv.edgeScale = std::isfinite(v.edgeScale) ? std::clamp(v.edgeScale, -100.0f, 100.0f) : 0.0f;
+        staged.push_back(mv);
+    }
+    return staged;
+}
+
+std::vector<MeshVertex> PmxViewportItem::stageDeformedVertices(const PmxDocument& doc, const PmxRuntimeScene& scene) {
+    std::vector<MeshVertex> staged;
+    const size_t n = doc.vertices.size();
+    staged.reserve(n);
+    const auto& defPos = scene.deformedPositions();
+    const auto& defNorm = scene.deformedNormals();
+    const auto& uvOffsets = scene.uvOffsets();
+
+    for (size_t i = 0; i < n; ++i) {
+        MeshVertex mv;
+        if (i < defPos.size() && isVec3Finite(defPos[i])) {
+            mv.position = defPos[i];
+        } else {
+            mv.position = PmxCamera::toRightHanded(doc.vertices[i].position);
+        }
+
+        if (i < defNorm.size() && isVec3Finite(defNorm[i])) {
+            mv.normal = defNorm[i];
+        } else {
+            glm::vec3 n_rh = PmxCamera::toRightHanded(doc.vertices[i].normal);
+            float len = glm::length(n_rh);
+            mv.normal = (std::isfinite(len) && len > 1e-5f) ? (n_rh / len) : glm::vec3(0.0f);
+        }
+
+        mv.uv = doc.vertices[i].uv;
+        if (i < uvOffsets.size()) {
+            const glm::vec4& uvo = uvOffsets[i];
+            if (std::isfinite(uvo.x) && std::isfinite(uvo.y)) {
+                mv.uv += glm::vec2(uvo.x, uvo.y);
+            }
+        }
+
+        mv.edgeScale = std::isfinite(doc.vertices[i].edgeScale)
+            ? std::clamp(doc.vertices[i].edgeScale, -100.0f, 100.0f)
+            : 0.0f;
+
         staged.push_back(mv);
     }
     return staged;
@@ -880,9 +971,212 @@ void PmxViewportItem::setController(pmx::PmxDocumentController* controller) {
 }
 
 void PmxViewportItem::onDocumentChanged() {
+    if (m_controller) {
+        m_runtimeScene.loadDocument(m_controller->document());
+        m_runtimeScene.setPhysicsEnabled(m_physicsEnabled);
+        m_animationPlayer.applyToScene(m_runtimeScene);
+        m_runtimeScene.evaluate(0.0f);
+    }
+    m_runtimeRevision++;
     m_modelRevision++;
     emit modelRevisionChanged();
     updateGizmoPosition();
+    update();
+}
+
+bool PmxViewportItem::isPlaying() const {
+    return m_animationPlayer.isPlaying();
+}
+
+float PmxViewportItem::currentFrame() const {
+    return m_animationPlayer.currentFrame();
+}
+
+void PmxViewportItem::setCurrentFrame(float frame) {
+    if (std::isnan(frame) || std::isinf(frame) || frame < 0.0f) {
+        frame = 0.0f;
+    }
+    m_animationPlayer.setFrame(frame);
+    m_animationPlayer.applyToScene(m_runtimeScene);
+    m_runtimeScene.evaluate(0.0f);
+    m_runtimeRevision++;
+    emit currentFrameChanged();
+    update();
+}
+
+int PmxViewportItem::maxFrame() const {
+    return static_cast<int>(m_animationPlayer.maxFrame());
+}
+
+bool PmxViewportItem::loopPlayback() const {
+    return m_animationPlayer.isLoop();
+}
+
+void PmxViewportItem::setLoopPlayback(bool loop) {
+    if (m_animationPlayer.isLoop() != loop) {
+        m_animationPlayer.setLoop(loop);
+        emit loopPlaybackChanged();
+    }
+}
+
+void PmxViewportItem::setPhysicsEnabled(bool enabled) {
+    if (m_physicsEnabled != enabled) {
+        m_physicsEnabled = enabled;
+        m_runtimeScene.setPhysicsEnabled(enabled);
+        emit physicsEnabledChanged();
+        if (m_transformViewMode) {
+            m_runtimeScene.evaluate(0.0f);
+            m_runtimeRevision++;
+            update();
+        }
+    }
+}
+
+void PmxViewportItem::setTransformViewMode(bool enabled) {
+    if (m_transformViewMode != enabled) {
+        m_transformViewMode = enabled;
+        emit transformViewModeChanged();
+        if (m_transformViewMode) {
+            if (m_controller && m_runtimeScene.boneCount() == 0 && !m_controller->document().bones.empty()) {
+                m_runtimeScene.loadDocument(m_controller->document());
+                m_runtimeScene.setPhysicsEnabled(m_physicsEnabled);
+            }
+            m_animationPlayer.applyToScene(m_runtimeScene);
+            m_runtimeScene.evaluate(0.0f);
+            m_runtimeRevision++;
+        } else {
+            if (m_animationPlayer.isPlaying()) {
+                pause();
+            }
+            updateGizmoPosition();
+        }
+        update();
+    }
+}
+
+bool PmxViewportItem::loadVmdMotion(const QString& filePath) {
+    QString cleanPath = filePath;
+    if (cleanPath.startsWith(QLatin1String("file://"))) {
+        cleanPath = QUrl(filePath).toLocalFile();
+    }
+    if (cleanPath.isEmpty()) {
+        return false;
+    }
+    QString error;
+    auto motionOpt = VmdImporter::loadFromFile(cleanPath, &error);
+    if (!motionOpt.has_value()) {
+        return false;
+    }
+    m_animationPlayer.loadMotion(*motionOpt);
+    emit maxFrameChanged();
+    emit currentFrameChanged();
+    emit playingChanged();
+
+    m_animationPlayer.applyToScene(m_runtimeScene);
+    m_runtimeScene.evaluate(0.0f);
+    m_runtimeRevision++;
+    update();
+    return true;
+}
+
+bool PmxViewportItem::loadVpdPose(const QString& filePath) {
+    QString cleanPath = filePath;
+    if (cleanPath.startsWith(QLatin1String("file://"))) {
+        cleanPath = QUrl(filePath).toLocalFile();
+    }
+    if (cleanPath.isEmpty()) {
+        return false;
+    }
+    QString error;
+    auto poseOpt = VpdImporter::loadFromFile(cleanPath, &error);
+    if (!poseOpt.has_value()) {
+        return false;
+    }
+    m_animationPlayer.loadPose(*poseOpt);
+    emit maxFrameChanged();
+    emit currentFrameChanged();
+    emit playingChanged();
+
+    m_animationPlayer.applyToScene(m_runtimeScene);
+    m_runtimeScene.evaluate(0.0f);
+    m_runtimeRevision++;
+    update();
+    return true;
+}
+
+void PmxViewportItem::play() {
+    m_animationPlayer.play();
+    m_elapsedTimer.restart();
+    if (m_playbackTimer) {
+        m_playbackTimer->start();
+    }
+    emit playingChanged();
+    update();
+}
+
+void PmxViewportItem::pause() {
+    m_animationPlayer.pause();
+    if (m_playbackTimer) {
+        m_playbackTimer->stop();
+    }
+    emit playingChanged();
+}
+
+void PmxViewportItem::stop() {
+    m_animationPlayer.stop();
+    if (m_playbackTimer) {
+        m_playbackTimer->stop();
+    }
+    m_animationPlayer.applyToScene(m_runtimeScene);
+    m_runtimeScene.evaluate(0.0f);
+    m_runtimeRevision++;
+    emit playingChanged();
+    emit currentFrameChanged();
+    update();
+}
+
+void PmxViewportItem::resetPhysics() {
+    m_runtimeScene.resetPhysics();
+    m_runtimeScene.evaluate(0.0f);
+    m_runtimeRevision++;
+    update();
+}
+
+void PmxViewportItem::resetPose() {
+    m_runtimeScene.resetTransforms();
+    for (int i = 0; i < m_runtimeScene.morphCount(); ++i) {
+        m_runtimeScene.setMorphWeight(i, 0.0f);
+    }
+    m_runtimeScene.resetPhysics();
+    m_runtimeScene.evaluate(0.0f);
+    m_runtimeRevision++;
+    update();
+}
+
+void PmxViewportItem::onPlaybackTick() {
+    if (!m_animationPlayer.isPlaying()) {
+        if (m_playbackTimer) m_playbackTimer->stop();
+        emit playingChanged();
+        return;
+    }
+    qint64 elapsedNs = m_elapsedTimer.restart();
+    float deltaTime = static_cast<float>(elapsedNs) * 1e-9f;
+    if (deltaTime <= 0.0f || deltaTime > 0.1f) {
+        deltaTime = 1.0f / 60.0f;
+    }
+
+    m_animationPlayer.update(deltaTime);
+    m_animationPlayer.applyToScene(m_runtimeScene);
+    m_runtimeScene.evaluate(deltaTime);
+    m_runtimeRevision++;
+
+    emit currentFrameChanged();
+
+    if (!m_animationPlayer.isPlaying()) {
+        if (m_playbackTimer) m_playbackTimer->stop();
+        emit playingChanged();
+    }
+
     update();
 }
 
@@ -1148,7 +1442,7 @@ void PmxViewportItem::updateGizmoPosition() {
 void PmxViewportItem::mousePressEvent(QMouseEvent* event) {
     m_lastMousePos = event->position();
 
-    if (event->button() == Qt::LeftButton && m_viewportMode == 2 && !(event->modifiers() & Qt::AltModifier) && m_controller) {
+    if (!m_transformViewMode && event->button() == Qt::LeftButton && m_viewportMode == 2 && !(event->modifiers() & Qt::AltModifier) && m_controller) {
         float w = static_cast<float>(width());
         float h = static_cast<float>(height());
         Ray ray = m_camera->screenPointToRay(event->position(), w, h);
@@ -1206,7 +1500,7 @@ void PmxViewportItem::mousePressEvent(QMouseEvent* event) {
         }
     }
 
-    if (event->button() == Qt::LeftButton && m_gizmo.mode() != GizmoMode::None && m_controller) {
+    if (!m_transformViewMode && event->button() == Qt::LeftButton && m_gizmo.mode() != GizmoMode::None && m_controller) {
         float w = static_cast<float>(width());
         float h = static_cast<float>(height());
         Ray ray = m_camera->screenPointToRay(event->position(), w, h);

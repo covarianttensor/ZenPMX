@@ -133,6 +133,16 @@ ApplicationWindow {
 
             ToolSeparator {}
 
+            ToolButton {
+                id: transformViewBtn
+                text: "TransformView"
+                checkable: true
+                checked: viewport.transformViewMode
+                onToggled: viewport.transformViewMode = checked
+            }
+
+            ToolSeparator {}
+
             Label {
                 text: "Mode:"
                 verticalAlignment: Text.AlignVCenter
@@ -256,6 +266,15 @@ ApplicationWindow {
                 wireframe: wireframeCheck.checked
                 showEdgeOutlines: edgeCheck.checked
                 focus: true
+            }
+
+            TimelineBar {
+                id: timelineBar
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                visible: viewport.transformViewMode
+                viewportItem: viewport
             }
         }
 
