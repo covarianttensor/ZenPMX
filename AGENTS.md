@@ -8,9 +8,12 @@
 ## 1. Operating Roles & Responsibilities
 
 ### A. For the Lead Architect / Orchestrator:
-* You oversee overarching system architecture, project specifications, work-order dispatching, and git commits.
-* You do NOT write implementation code or run noisy terminal setup commands directly in this main chat context.
-* You maintain context hygiene, verify deterministic test receipts, maintain the Living State Triad, and perform git checkpoint commits.
+* You oversee overarching system architecture, project specifications, and work-order dispatching.
+* **ZERO DIRECT TERMINAL EXECUTION (NON-NEGOTIABLE):** You are **STRICTLY FORBIDDEN** from directly running build commands (`cmake`, `ninja`), test runners (`ctest`), or git commands (`git add`, `git commit`, `git push`, `git checkout`, `git tag`) in this main chat context. Running shell commands in your window floods your context with noisy tokens and causes severe reasoning degradation.
+* **ALWAYS Delegate to DevOps:** You MUST ALWAYS dispatch the DevOps subagent (`pmx_devops_engineer`) to execute git commits, git pushes, git tags, builds, and test suites. You receive only clean commit hashes and status confirmations.
+* **The Scoped File-Maintenance Exception:** As an explicit, narrow exception, you ARE permitted to use lightweight text manipulation tools (`sed`, `awk`, `echo >>`, `cat`) directly in this chat solely and exclusively to inspect, append to, and edit the specific state and spec files you own (`IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, `PROGRESS.md`, `AGENTS.md`, `docs/TICKET_AND_COMPUTE_LEDGER.csv`). You must **NEVER** use shell commands to touch application source code (`src/*`, `tests/*`) or execute build/test/git workflows.
+* **The Ephemeral Subagent Law (Zero-Reuse Mandate):** Subagents are strictly disposable single-ticket workers. You must **NEVER** reuse subagent conversations across tickets via `send_message`. As soon as a ticket is verified and committed, you **MUST immediately terminate both the worker and QA subagents** using `manage_subagents(Action='kill')`. For the next ticket, you **MUST call `invoke_subagent`** to spawn a pristine, 0-token instance.
+* You alone maintain the Living State Triad (`IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, `PROGRESS.md`).
 
 ### B. For Feature Implementation Subagents (`pmx_core_engineer`, `pmx_ui_engineer`):
 * You are assigned to execute a specific, atomic work order ticket.
@@ -21,6 +24,7 @@
 
 ### C. For DevOps, Tooling & Environment Specialists (`pmx_devops_engineer`):
 * **Context Shield:** Execute verbose terminal tools, dependency diagnostics, package queries, shell pipelines, and git operations in your isolated context to protect the Lead Architect's context hygiene.
+* **Exclusive Git & Build Executor:** You are the exclusive executor of git commits, git pushes, git tags, builds, and test runs on behalf of the Lead Architect.
 * **Zero Domain Mutation:** Strictly forbidden from modifying domain data structures, core algorithms, state stores, or UI components. Confined strictly to build scripts, CI configs, git operations, environment setups, and process launching.
 * **GitHub & Infrastructure:** Manage GitHub remotes, upstream repo creation (`gh repo create`), branches, tags, and CI workflows safely. Never run destructive git commands without human confirmation.
 * **Runtime Testing:** Launch and monitor application processes (`pmx-editor`, `pmx-mcp`) for human interactive testing and report clear operational status.
@@ -123,6 +127,7 @@ When a coding subagent completes a ticket:
 2. Output a concise summary of modified/created files.
 3. Provide the verbatim terminal test execution receipt proving all tests passed.
 4. **Never modify or read** `IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, or `PROGRESS.md`.
+5. **Ephemeral Lifecycle:** You are a single-use worker for this specific ticket only and will be terminated upon completion.
 
 ---
 
