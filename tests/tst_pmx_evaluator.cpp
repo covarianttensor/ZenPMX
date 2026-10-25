@@ -1,6 +1,7 @@
 #include "core/PmxDocument.h"
 #include "core/PmxTypes.h"
 #include "evaluator/PmxRuntimeScene.h"
+#include "evaluator/MmdCcdIkSolver.h"
 
 #include <QtTest>
 #include <cmath>
@@ -28,6 +29,14 @@ private slots:
     void testCyclicGroupMorphSafety();
     void testResetTransformsRestPose();
     void testCoordinateConversions();
+
+    // CCDIK Solver Tests (Ticket 4.2):
+    void testCcdIk2LinkReachable();
+    void testCcdIkKneeAngleLimits();
+    void testCcdIkIterationClamping();
+    void testCcdIkUnreachableTarget();
+    void testCcdIkEnableToggle();
+    void testEulerAngleDecomposition();
 };
 
 void TstPmxEvaluator::initTestCase() {
@@ -516,6 +525,361 @@ void TstPmxEvaluator::testCoordinateConversions() {
     QCOMPARE(qRoundTrip.x, qLH.x);
     QCOMPARE(qRoundTrip.y, qLH.y);
     QCOMPARE(qRoundTrip.z, qLH.z);
+}
+
+void TstPmxEvaluator::testCcdIk2LinkReachable() {
+    PmxDocument doc;
+
+    // Bone 0: Thigh (chain root)
+    PmxBone thigh;
+    thigh.nameJp = "左足";
+    thigh.parentBoneIndex = -1;
+    thigh.position = {0.0f, 2.0f, 0.0f};
+
+    // Bone 1: Shin (knee)
+    PmxBone shin;
+    shin.nameJp = "左ひざ";
+    shin.parentBoneIndex = 0;
+    shin.position = {0.0f, 1.0f, 0.0f};
+
+    // Bone 2: Ankle (effector)
+    PmxBone ankle;
+    ankle.nameJp = "左足首";
+    ankle.parentBoneIndex = 1;
+    ankle.position = {0.0f, 0.0f, 0.0f};
+
+    // Bone 3: IK Controller Bone (IK bone)
+    PmxBone legIk;
+    legIk.nameJp = "左足ＩＫ";
+    legIk.parentBoneIndex = -1;
+    legIk.position = {0.0f, 0.0f, 0.0f};
+    legIk.boneFlags = 0x0020; // IK Flag
+    legIk.ikTargetBoneIndex = 2; // Ankle
+    legIk.ikLoopCount = 40;
+    legIk.ikLimitAngle = 0.5f;
+
+    // Links: leaf (Shin) to root (Thigh)
+    PmxIkLink linkShin;
+    linkShin.boneIndex = 1;
+    linkShin.hasAngleLimit = 0;
+
+    PmxIkLink linkThigh;
+    linkThigh.boneIndex = 0;
+    linkThigh.hasAngleLimit = 0;
+
+    legIk.ikLinks = {linkShin, linkThigh};
+
+    doc.bones = {thigh, shin, ankle, legIk};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Initial pose: effector is at (0, 0, 0)
+    QVERIFY(glm::distance(scene.worldPosition(2), glm::vec3(0.0f, 0.0f, 0.0f)) < 1e-4f);
+
+    // Move IK target within reach: (0.0f, 0.5f, 0.5f)
+    // Distance from Thigh (0, 2, 0) is sqrt(1.5^2 + 0.5^2) = sqrt(2.5) ~ 1.58 < 2.0 (reachable)
+    scene.setBoneTransform(3, glm::vec3(0.0f, 0.5f, 0.5f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.evaluate();
+
+    glm::vec3 effectorPos = scene.worldPosition(2);
+    glm::vec3 targetPos = scene.worldPosition(3);
+    float dist = glm::distance(effectorPos, targetPos);
+    QVERIFY2(dist < 1e-3f, qPrintable(QString("Effector dist %1 >= 1e-3").arg(dist)));
+}
+
+void TstPmxEvaluator::testCcdIkKneeAngleLimits() {
+    PmxDocument doc;
+
+    // Bone 0: Thigh
+    PmxBone thigh;
+    thigh.nameJp = "左足";
+    thigh.parentBoneIndex = -1;
+    thigh.position = {0.0f, 2.0f, 0.0f};
+
+    // Bone 1: Shin (Knee joint)
+    PmxBone shin;
+    shin.nameJp = "左ひざ";
+    shin.parentBoneIndex = 0;
+    shin.position = {0.0f, 1.0f, 0.0f};
+
+    // Bone 2: Ankle (effector)
+    PmxBone ankle;
+    ankle.nameJp = "左足首";
+    ankle.parentBoneIndex = 1;
+    ankle.position = {0.0f, 0.0f, 0.0f};
+
+    // Bone 3: IK Controller
+    PmxBone legIk;
+    legIk.nameJp = "左足ＩＫ";
+    legIk.parentBoneIndex = -1;
+    legIk.position = {0.0f, 0.0f, 0.0f};
+    legIk.boneFlags = 0x0020;
+    legIk.ikTargetBoneIndex = 2;
+    legIk.ikLoopCount = 60;
+    legIk.ikLimitAngle = 0.5f;
+
+    // Knee link has angle limit in Left-Handed PMX:
+    // MMD Knee LH: limitMin = (-3.14159, 0, 0), limitMax = (-0.005, 0, 0)
+    // Converted to RH: minX = -(-0.005) = +0.005, maxX = -(-3.14159) = +3.14159, Y=0, Z=0.
+    PmxIkLink linkShin;
+    linkShin.boneIndex = 1;
+    linkShin.hasAngleLimit = 1;
+    linkShin.limitMin = glm::vec3(-3.14159f, 0.0f, 0.0f);
+    linkShin.limitMax = glm::vec3(-0.005f, 0.0f, 0.0f);
+
+    PmxIkLink linkThigh;
+    linkThigh.boneIndex = 0;
+    linkThigh.hasAngleLimit = 0;
+
+    legIk.ikLinks = {linkShin, linkThigh};
+
+    doc.bones = {thigh, shin, ankle, legIk};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Case A: Move target where bending forward (+Z in RH) is required
+    // Target at (0.0f, 0.6f, 0.8f) in RH
+    scene.setBoneTransform(3, glm::vec3(0.0f, 0.6f, 0.8f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.evaluate();
+
+    glm::vec3 kneeEuler = MmdCcdIkSolver::quatToZxyEuler(scene.bone(1).ikRotation);
+    // Knee must bend with positive X angle >= 0.005
+    QVERIFY2(kneeEuler.x >= 0.005f, qPrintable(QString("Knee X %1 < 0.005").arg(kneeEuler.x)));
+    QVERIFY2(std::abs(kneeEuler.y) < 1e-3f, "Knee Y angle should be clamped to 0");
+    QVERIFY2(std::abs(kneeEuler.z) < 1e-3f, "Knee Z angle should be clamped to 0");
+
+    // Case B: Move target in the opposite direction where bending backward (-X) would be attempted
+    // Target at (0.0f, 0.6f, -0.8f)
+    scene.setBoneTransform(3, glm::vec3(0.0f, 0.6f, -0.8f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.evaluate();
+
+    glm::vec3 kneeEulerOpposite = MmdCcdIkSolver::quatToZxyEuler(scene.bone(1).ikRotation);
+    // Knee must NEVER bend backwards into negative angle: kneeEulerOpposite.x >= 0.0f
+    QVERIFY2(kneeEulerOpposite.x >= 0.0f, qPrintable(QString("Knee bent backward into negative X: %1").arg(kneeEulerOpposite.x)));
+    QVERIFY2(std::abs(kneeEulerOpposite.y) < 1e-3f, "Knee Y angle should remain 0");
+    QVERIFY2(std::abs(kneeEulerOpposite.z) < 1e-3f, "Knee Z angle should remain 0");
+}
+
+void TstPmxEvaluator::testCcdIkIterationClamping() {
+    PmxDocument doc;
+
+    PmxBone thigh;
+    thigh.nameJp = "Thigh";
+    thigh.parentBoneIndex = -1;
+    thigh.position = {0.0f, 2.0f, 0.0f};
+
+    PmxBone ankle;
+    ankle.nameJp = "Ankle";
+    ankle.parentBoneIndex = 0;
+    ankle.position = {0.0f, 0.0f, 0.0f};
+
+    PmxBone ikBone;
+    ikBone.nameJp = "IK";
+    ikBone.parentBoneIndex = -1;
+    ikBone.position = {0.0f, 0.0f, 0.0f};
+    ikBone.boneFlags = 0x0020;
+    ikBone.ikTargetBoneIndex = 1;
+    // Set a very small limitAngle = 0.05 rad and loopCount = 2
+    ikBone.ikLoopCount = 2;
+    ikBone.ikLimitAngle = 0.05f;
+
+    PmxIkLink linkThigh;
+    linkThigh.boneIndex = 0;
+    linkThigh.hasAngleLimit = 0;
+    ikBone.ikLinks = {linkThigh};
+
+    doc.bones = {thigh, ankle, ikBone};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Target is 90 degrees away: at (2.0f, 2.0f, 0.0f), requiring ~1.57 rad rotation
+    scene.setBoneTransform(2, glm::vec3(2.0f, 2.0f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.evaluate();
+
+    // With loopCount=2 and limitAngle=0.05, max rotation cannot exceed 2 * 0.05 = 0.10 rad
+    glm::quat rot = scene.bone(0).ikRotation;
+    float angle = 2.0f * std::acos(std::clamp(rot.w, -1.0f, 1.0f));
+    QVERIFY2(angle <= 0.105f, qPrintable(QString("Angle %1 exceeded max 2*limitAngle (0.10)").arg(angle)));
+    QVERIFY2(angle >= 0.095f, qPrintable(QString("Angle %1 did not progress by 2*limitAngle").arg(angle)));
+
+    // Now test with 4 iterations:
+    scene.ikChains()[0].loopCount = 4;
+    scene.evaluate();
+    rot = scene.bone(0).ikRotation;
+    angle = 2.0f * std::acos(std::clamp(rot.w, -1.0f, 1.0f));
+    QVERIFY2(angle <= 0.205f, qPrintable(QString("Angle %1 exceeded max 4*limitAngle (0.20)").arg(angle)));
+    QVERIFY2(angle >= 0.195f, qPrintable(QString("Angle %1 did not progress by 4*limitAngle").arg(angle)));
+}
+
+void TstPmxEvaluator::testCcdIkUnreachableTarget() {
+    PmxDocument doc;
+
+    PmxBone thigh;
+    thigh.nameJp = "Thigh";
+    thigh.parentBoneIndex = -1;
+    thigh.position = {0.0f, 2.0f, 0.0f};
+
+    PmxBone shin;
+    shin.nameJp = "Shin";
+    shin.parentBoneIndex = 0;
+    shin.position = {0.0f, 1.0f, 0.0f};
+
+    PmxBone ankle;
+    ankle.nameJp = "Ankle";
+    ankle.parentBoneIndex = 1;
+    ankle.position = {0.0f, 0.0f, 0.0f};
+
+    PmxBone ikBone;
+    ikBone.nameJp = "IK";
+    ikBone.parentBoneIndex = -1;
+    ikBone.position = {0.0f, 0.0f, 0.0f};
+    ikBone.boneFlags = 0x0020;
+    ikBone.ikTargetBoneIndex = 2;
+    ikBone.ikLoopCount = 40;
+    ikBone.ikLimitAngle = 0.5f;
+
+    PmxIkLink linkShin{1, 0, {}, {}};
+    PmxIkLink linkThigh{0, 0, {}, {}};
+    ikBone.ikLinks = {linkShin, linkThigh};
+
+    doc.bones = {thigh, shin, ankle, ikBone};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Target far away along +X: (10.0, 2.0, 0.0) - chain total reach is 2.0
+    scene.setBoneTransform(3, glm::vec3(10.0f, 2.0f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.evaluate();
+
+    // Check all bone world matrices and positions for NaN or Inf
+    for (int i = 0; i < scene.boneCount(); ++i) {
+        glm::vec3 pos = scene.worldPosition(i);
+        QVERIFY(!std::isnan(pos.x) && !std::isnan(pos.y) && !std::isnan(pos.z));
+        QVERIFY(!std::isinf(pos.x) && !std::isinf(pos.y) && !std::isinf(pos.z));
+        const glm::mat4& m = scene.worldMatrix(i);
+        for (int c = 0; c < 4; ++c) {
+            for (int r = 0; r < 4; ++r) {
+                QVERIFY(!std::isnan(m[c][r]));
+                QVERIFY(!std::isinf(m[c][r]));
+            }
+        }
+    }
+
+    // Effector should be extended along target direction (+X) from root (0, 2, 0)
+    glm::vec3 effectorPos = scene.worldPosition(2);
+    float distFromRoot = glm::distance(effectorPos, glm::vec3(0.0f, 2.0f, 0.0f));
+    // Full extension of length 1.0 + 1.0 = 2.0
+    QVERIFY2(std::abs(distFromRoot - 2.0f) < 0.05f,
+             qPrintable(QString("Chain extension %1 != 2.0").arg(distFromRoot)));
+    // Effector x position should be near 2.0
+    QVERIFY2(std::abs(effectorPos.x - 2.0f) < 0.05f,
+             qPrintable(QString("Effector X %1 != 2.0").arg(effectorPos.x)));
+}
+
+void TstPmxEvaluator::testCcdIkEnableToggle() {
+    PmxDocument doc;
+
+    PmxBone thigh;
+    thigh.nameJp = "Thigh";
+    thigh.parentBoneIndex = -1;
+    thigh.position = {0.0f, 2.0f, 0.0f};
+
+    PmxBone shin;
+    shin.nameJp = "Shin";
+    shin.parentBoneIndex = 0;
+    shin.position = {0.0f, 1.0f, 0.0f};
+
+    PmxBone ankle;
+    ankle.nameJp = "Ankle";
+    ankle.parentBoneIndex = 1;
+    ankle.position = {0.0f, 0.0f, 0.0f};
+
+    PmxBone ikBone;
+    ikBone.nameJp = "IK";
+    ikBone.parentBoneIndex = -1;
+    ikBone.position = {0.0f, 0.0f, 0.0f};
+    ikBone.boneFlags = 0x0020;
+    ikBone.ikTargetBoneIndex = 2;
+    ikBone.ikLoopCount = 40;
+    ikBone.ikLimitAngle = 0.5f;
+
+    PmxIkLink linkShin{1, 0, {}, {}};
+    PmxIkLink linkThigh{0, 0, {}, {}};
+    ikBone.ikLinks = {linkShin, linkThigh};
+
+    doc.bones = {thigh, shin, ankle, ikBone};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Initial check: 1 IK chain loaded and enabled
+    QCOMPARE(scene.ikChainCount(), 1);
+    QVERIFY(scene.isIkEnabled(3));
+
+    // Move target and evaluate: IK solves and bends links
+    scene.setBoneTransform(3, glm::vec3(0.0f, 0.5f, 0.5f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    scene.evaluate();
+
+    QVERIFY(glm::distance(scene.worldPosition(2), glm::vec3(0.0f, 0.5f, 0.5f)) < 1e-3f);
+    // Link rotations are non-identity
+    QVERIFY(scene.bone(0).ikRotation != glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    QVERIFY(scene.bone(1).ikRotation != glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+
+    // Disable IK chain on the IK bone
+    scene.setIkEnabled(3, false);
+    QVERIFY(!scene.isIkEnabled(3));
+
+    // Evaluate: links must revert to rest/user pose
+    scene.evaluate();
+
+    QVERIFY(scene.bone(0).ikRotation == glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    QVERIFY(scene.bone(1).ikRotation == glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    // Effector position is back at rest pose (0, 0, 0)
+    QVERIFY(glm::distance(scene.worldPosition(2), glm::vec3(0.0f, 0.0f, 0.0f)) < 1e-4f);
+
+    // Re-enable IK chain
+    scene.setIkEnabled(3, true);
+    QVERIFY(scene.isIkEnabled(3));
+    scene.evaluate();
+
+    // Effector reaches target again
+    QVERIFY(glm::distance(scene.worldPosition(2), glm::vec3(0.0f, 0.5f, 0.5f)) < 1e-3f);
+}
+
+void TstPmxEvaluator::testEulerAngleDecomposition() {
+    glm::vec3 testAngles[] = {
+        {0.0f, 0.0f, 0.0f},
+        {0.5f, 0.0f, 0.0f},
+        {-0.3f, 0.0f, 0.0f},
+        {0.0f, 0.4f, 0.0f},
+        {0.0f, 0.0f, -0.6f},
+        {0.2f, -0.3f, 0.4f},
+        {-0.5f, 0.7f, -0.2f},
+        {1.5707f, 0.3f, 0.0f},  // near gimbal lock +pi/2
+        {-1.5707f, 0.5f, 0.0f}, // near gimbal lock -pi/2
+    };
+
+    for (const auto& a : testAngles) {
+        glm::quat q = MmdCcdIkSolver::zxyEulerToQuat(a);
+        glm::vec3 eulerRec = MmdCcdIkSolver::quatToZxyEuler(q);
+        glm::quat qRec = MmdCcdIkSolver::zxyEulerToQuat(eulerRec);
+
+        float dotVal = std::abs(glm::dot(q, qRec));
+        QVERIFY2(std::abs(dotVal - 1.0f) < 1e-4f,
+                 qPrintable(QString("Euler roundtrip failed for (%1, %2, %3)").arg(a.x).arg(a.y).arg(a.z)));
+    }
+
+    // Clamping test:
+    glm::quat qOver = MmdCcdIkSolver::zxyEulerToQuat(glm::vec3(2.0f, -1.0f, 3.0f));
+    glm::quat qClamped = MmdCcdIkSolver::clampEulerAngles(
+        qOver, glm::vec3(0.0f, -0.5f, -1.0f), glm::vec3(1.0f, 0.5f, 1.0f));
+    glm::vec3 eulerClamped = MmdCcdIkSolver::quatToZxyEuler(qClamped);
+    QVERIFY(eulerClamped.x <= 1.001f && eulerClamped.x >= -0.001f);
+    QVERIFY(eulerClamped.y <= 0.501f && eulerClamped.y >= -0.501f);
+    QVERIFY(eulerClamped.z <= 1.001f && eulerClamped.z >= -1.001f);
 }
 
 QTEST_MAIN(TstPmxEvaluator)

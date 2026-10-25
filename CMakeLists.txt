@@ -97,6 +97,8 @@ target_link_libraries(PmxCore PUBLIC
 )
 
 add_library(PmxEvaluator STATIC
+    src/evaluator/MmdCcdIkSolver.h
+    src/evaluator/MmdCcdIkSolver.cpp
     src/evaluator/PmxRuntimeScene.h
     src/evaluator/PmxRuntimeScene.cpp
 )

@@ -25,6 +25,9 @@ void PmxRuntimeScene::loadDocument(const PmxDocument& doc) {
     m_baseMaterials.clear();
     m_evaluatedMaterials.clear();
 
+    m_ikChains.clear();
+    m_children.clear();
+
     const size_t numBones = doc.bones.size();
     m_bones.reserve(numBones);
     m_inverseBindMatrices.reserve(numBones);
@@ -51,7 +54,35 @@ void PmxRuntimeScene::loadDocument(const PmxDocument& doc) {
 
         m_bones.push_back(rb);
         m_inverseBindMatrices.push_back(glm::translate(glm::mat4(1.0f), -rb.restPosition));
+
+        // Parse IK chains: boneFlags & 0x0020
+        if ((src.boneFlags & 0x0020u) != 0u) {
+            IkChain chain;
+            chain.ikBoneIndex = static_cast<int32_t>(i);
+            chain.targetBoneIndex = src.ikTargetBoneIndex;
+            chain.loopCount = (src.ikLoopCount > 0) ? src.ikLoopCount : 40;
+            chain.limitAngle = (src.ikLimitAngle > 0.0f) ? src.ikLimitAngle : 0.5f;
+            chain.enabled = true;
+            chain.links.reserve(src.ikLinks.size());
+            for (const auto& srcLink : src.ikLinks) {
+                IkLinkConstraint link;
+                link.boneIndex = srcLink.boneIndex;
+                link.hasLimits = (srcLink.hasAngleLimit != 0);
+                if (link.hasLimits) {
+                    link.minAngle.x = -srcLink.limitMax.x;
+                    link.maxAngle.x = -srcLink.limitMin.x;
+                    link.minAngle.y = -srcLink.limitMax.y;
+                    link.maxAngle.y = -srcLink.limitMin.y;
+                    link.minAngle.z = srcLink.limitMin.z;
+                    link.maxAngle.z = srcLink.limitMax.z;
+                }
+                chain.links.push_back(link);
+            }
+            m_ikChains.push_back(std::move(chain));
+        }
     }
+
+    rebuildChildrenHierarchy();
 
     // Sort evaluation order: (isPhysicsAfterDeform, deformTier, index)
     m_evaluationOrder.resize(numBones);
@@ -94,6 +125,7 @@ void PmxRuntimeScene::loadDocument(const PmxDocument& doc) {
 void PmxRuntimeScene::evaluate() {
     evaluateMorphs();
     evaluatePrePhysicsBones();
+    solveIk();
     evaluatePostPhysicsBones();
 }
 
@@ -318,7 +350,7 @@ void PmxRuntimeScene::evaluateSingleBone(int32_t idx) {
 
     // Local translation & rotation
     glm::vec3 t = bone.userTranslation + bone.morphTranslation + bone.appendTranslation;
-    glm::quat q = bone.userRotation * bone.morphRotation * bone.appendRotation;
+    glm::quat q = bone.userRotation * bone.morphRotation * bone.appendRotation * bone.ikRotation;
     if (glm::dot(q, q) > 1e-8f) {
         q = glm::normalize(q);
     } else {
@@ -373,6 +405,7 @@ void PmxRuntimeScene::resetTransforms() {
         bone.morphRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         bone.appendTranslation = glm::vec3(0.0f);
         bone.appendRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        bone.ikRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     }
     std::fill(m_morphWeights.begin(), m_morphWeights.end(), 0.0f);
     evaluate();
@@ -452,6 +485,97 @@ const EvaluatedMaterial& PmxRuntimeScene::evaluatedMaterial(int materialIndex) c
         return m_evaluatedMaterials[static_cast<size_t>(materialIndex)];
     }
     return s_dummyMaterial;
+}
+
+void PmxRuntimeScene::solveIk() {
+    // Reset ikRotation for all links in all chains before solving
+    for (const auto& chain : m_ikChains) {
+        for (const auto& link : chain.links) {
+            if (link.boneIndex >= 0 && link.boneIndex < static_cast<int32_t>(m_bones.size())) {
+                m_bones[static_cast<size_t>(link.boneIndex)].ikRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+                updateSubtree(link.boneIndex);
+            }
+        }
+    }
+
+    for (const auto& chain : m_ikChains) {
+        if (chain.enabled) {
+            MmdCcdIkSolver::solveChain(*this, chain);
+        }
+    }
+}
+
+void PmxRuntimeScene::setIkEnabled(int boneIndex, bool enabled) {
+    for (auto& chain : m_ikChains) {
+        if (chain.ikBoneIndex == boneIndex) {
+            chain.enabled = enabled;
+        }
+    }
+}
+
+bool PmxRuntimeScene::isIkEnabled(int boneIndex) const {
+    for (const auto& chain : m_ikChains) {
+        if (chain.ikBoneIndex == boneIndex) {
+            return chain.enabled;
+        }
+    }
+    return false;
+}
+
+int PmxRuntimeScene::ikChainCount() const {
+    return static_cast<int>(m_ikChains.size());
+}
+
+void PmxRuntimeScene::addIkChain(const IkChain& chain) {
+    m_ikChains.push_back(chain);
+}
+
+void PmxRuntimeScene::clearIkChains() {
+    m_ikChains.clear();
+}
+
+void PmxRuntimeScene::setBoneIkRotation(int boneIndex, const glm::quat& rotation) {
+    if (boneIndex >= 0 && boneIndex < static_cast<int>(m_bones.size())) {
+        if (glm::dot(rotation, rotation) > 1e-8f) {
+            m_bones[static_cast<size_t>(boneIndex)].ikRotation = glm::normalize(rotation);
+        } else {
+            m_bones[static_cast<size_t>(boneIndex)].ikRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        }
+    }
+}
+
+static const glm::quat s_identityQuat(1.0f, 0.0f, 0.0f, 0.0f);
+
+const glm::quat& PmxRuntimeScene::boneIkRotation(int boneIndex) const {
+    if (boneIndex >= 0 && boneIndex < static_cast<int>(m_bones.size())) {
+        return m_bones[static_cast<size_t>(boneIndex)].ikRotation;
+    }
+    return s_identityQuat;
+}
+
+void PmxRuntimeScene::rebuildChildrenHierarchy() {
+    m_children.assign(m_bones.size(), {});
+    for (size_t i = 0; i < m_bones.size(); ++i) {
+        int32_t p = m_bones[i].parentIndex;
+        if (p >= 0 && p < static_cast<int32_t>(m_bones.size()) && p != static_cast<int32_t>(i)) {
+            m_children[static_cast<size_t>(p)].push_back(static_cast<int32_t>(i));
+        }
+    }
+}
+
+void PmxRuntimeScene::updateSubtree(int32_t boneIndex, int depth) {
+    if (depth > 256 || boneIndex < 0 || boneIndex >= static_cast<int32_t>(m_bones.size())) {
+        return;
+    }
+    evaluateSingleBone(boneIndex);
+    if (m_children.size() != m_bones.size()) {
+        rebuildChildrenHierarchy();
+    }
+    if (static_cast<size_t>(boneIndex) < m_children.size()) {
+        for (int32_t childIndex : m_children[static_cast<size_t>(boneIndex)]) {
+            updateSubtree(childIndex, depth + 1);
+        }
+    }
 }
 
 } // namespace pmx

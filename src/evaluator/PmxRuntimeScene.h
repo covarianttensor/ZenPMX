@@ -2,6 +2,7 @@
 
 #include "core/PmxDocument.h"
 #include "core/PmxTypes.h"
+#include "MmdCcdIkSolver.h"
 
 #include <QString>
 #include <array>
@@ -33,6 +34,7 @@ struct RuntimeBone {
     glm::quat morphRotation{1.0f, 0.0f, 0.0f, 0.0f};
     glm::vec3 appendTranslation{0.0f};
     glm::quat appendRotation{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::quat ikRotation{1.0f, 0.0f, 0.0f, 0.0f};
 
     glm::mat4 localMatrix{1.0f};
     glm::mat4 worldMatrix{1.0f};
@@ -100,6 +102,21 @@ public:
     int vertexCount() const { return static_cast<int>(m_vertexOffsets.size()); }
     int materialCount() const { return static_cast<int>(m_evaluatedMaterials.size()); }
 
+    // IK Controls
+    void solveIk();
+    void setIkEnabled(int boneIndex, bool enabled);
+    bool isIkEnabled(int boneIndex) const;
+    int ikChainCount() const;
+    void addIkChain(const IkChain& chain);
+    void clearIkChains();
+    const std::vector<IkChain>& ikChains() const { return m_ikChains; }
+    std::vector<IkChain>& ikChains() { return m_ikChains; }
+
+    void setBoneIkRotation(int boneIndex, const glm::quat& rotation);
+    const glm::quat& boneIkRotation(int boneIndex) const;
+    void updateSubtree(int32_t boneIndex, int depth = 0);
+    void rebuildChildrenHierarchy();
+
     // Coordinate conversion utilities
     static glm::vec3 toRightHanded(const glm::vec3& vLH) {
         return glm::vec3(vLH.x, vLH.y, -vLH.z);
@@ -129,6 +146,9 @@ private:
 
     std::vector<PmxMaterial> m_baseMaterials;
     std::vector<EvaluatedMaterial> m_evaluatedMaterials;
+
+    std::vector<IkChain> m_ikChains;
+    std::vector<std::vector<int32_t>> m_children;
 };
 
 } // namespace pmx
