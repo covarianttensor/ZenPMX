@@ -89,6 +89,10 @@ public:
     void setMorphWeight(int morphIndex, float weight);
     float morphWeight(int morphIndex) const;
 
+    // Lookup helpers
+    int findBoneByName(const QString& name) const;
+    int findMorphByName(const QString& name) const;
+
     // Bone accessors
     const std::vector<RuntimeBone>& bones() const { return m_bones; }
     const RuntimeBone& bone(int boneIndex) const;

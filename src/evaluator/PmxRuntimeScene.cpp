@@ -489,6 +489,30 @@ float PmxRuntimeScene::morphWeight(int morphIndex) const {
     return 0.0f;
 }
 
+int PmxRuntimeScene::findBoneByName(const QString& name) const {
+    if (name.isEmpty()) {
+        return -1;
+    }
+    for (size_t i = 0; i < m_bones.size(); ++i) {
+        if (m_bones[i].nameJp == name || m_bones[i].nameEn == name) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+int PmxRuntimeScene::findMorphByName(const QString& name) const {
+    if (name.isEmpty()) {
+        return -1;
+    }
+    for (size_t i = 0; i < m_morphs.size(); ++i) {
+        if (m_morphs[i].nameJp == name || m_morphs[i].nameEn == name) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
 const RuntimeBone& PmxRuntimeScene::bone(int boneIndex) const {
     if (boneIndex >= 0 && boneIndex < static_cast<int>(m_bones.size())) {
         return m_bones[static_cast<size_t>(boneIndex)];

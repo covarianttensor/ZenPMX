@@ -113,6 +113,12 @@ add_library(PmxEvaluator STATIC
     src/evaluator/PmxVertexDeformer.cpp
     src/evaluator/PmxPhysicsEngine.h
     src/evaluator/PmxPhysicsEngine.cpp
+    src/evaluator/VmdImporter.h
+    src/evaluator/VmdImporter.cpp
+    src/evaluator/VpdImporter.h
+    src/evaluator/VpdImporter.cpp
+    src/evaluator/PmxAnimationPlayer.h
+    src/evaluator/PmxAnimationPlayer.cpp
 )
 
 target_include_directories(PmxEvaluator PUBLIC

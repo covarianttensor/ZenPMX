@@ -3,6 +3,9 @@
 #include "evaluator/PmxRuntimeScene.h"
 #include "evaluator/MmdCcdIkSolver.h"
 #include "evaluator/PmxPhysicsEngine.h"
+#include "evaluator/VmdImporter.h"
+#include "evaluator/VpdImporter.h"
+#include "evaluator/PmxAnimationPlayer.h"
 
 #include <QtTest>
 #include <cmath>
@@ -59,6 +62,19 @@ private slots:
     void testPhysicsSceneReset();
     void testBulletPhysicsAndBoneMode();
     void testBulletCompoundEulerRotation();
+
+    // VMD & VPD Motion / Pose Tests (Ticket 4.5):
+    void testVmdBinaryImportAndKeyframes();
+    void testVmdInterpolationEvaluation();
+    void testVpdTextPoseImport();
+    void testVmdIkSwitchingTimeline();
+    void testAnimationPlaybackDeltaUpdate();
+    void testVmdCubicBezierNonLinear();
+    void testVmdRoundtrip();
+    void testVpdRoundtrip();
+    void testAnimationPlayerLooping();
+    void testAnimationPlayerNanHandling();
+    void testVmdMalformedBufferRejection();
 };
 
 void TstPmxEvaluator::initTestCase() {
@@ -1682,6 +1698,630 @@ void TstPmxEvaluator::testBulletCompoundEulerRotation() {
                                     .arg(c).arg(r).arg(actualVal).arg(expectedVal)));
         }
     }
+}
+
+void TstPmxEvaluator::testVmdBinaryImportAndKeyframes() {
+    // Construct a raw binary VMD 2.0 stream manually to test exact parser layout
+    QByteArray rawData;
+
+    // Header: 30 bytes "Vocaloid Motion Data 0002\0..."
+    QByteArray header = "Vocaloid Motion Data 0002";
+    header.append(QByteArray(30 - header.size(), '\0'));
+    rawData.append(header);
+
+    // Model name: 20 bytes "TestModel\0..."
+    QByteArray modelName = "TestModel";
+    modelName.append(QByteArray(20 - modelName.size(), '\0'));
+    rawData.append(modelName);
+
+    // Bone keyframe count: 3
+    quint32 boneCount = qToLittleEndian(static_cast<quint32>(3));
+    rawData.append(reinterpret_cast<const char*>(&boneCount), sizeof(quint32));
+
+    auto appendBoneKf = [&](const QString& name, quint32 frame, glm::vec3 posLH, glm::vec4 rotLH) {
+        QByteArray nameBytes = name.toUtf8();
+        nameBytes.append(QByteArray(15 - nameBytes.size(), '\0'));
+        rawData.append(nameBytes);
+
+        quint32 leFrame = qToLittleEndian(frame);
+        rawData.append(reinterpret_cast<const char*>(&leFrame), sizeof(quint32));
+
+        quint32 px = qToLittleEndian(*reinterpret_cast<quint32*>(&posLH.x));
+        quint32 py = qToLittleEndian(*reinterpret_cast<quint32*>(&posLH.y));
+        quint32 pz = qToLittleEndian(*reinterpret_cast<quint32*>(&posLH.z));
+        rawData.append(reinterpret_cast<const char*>(&px), sizeof(quint32));
+        rawData.append(reinterpret_cast<const char*>(&py), sizeof(quint32));
+        rawData.append(reinterpret_cast<const char*>(&pz), sizeof(quint32));
+
+        quint32 rx = qToLittleEndian(*reinterpret_cast<quint32*>(&rotLH.x));
+        quint32 ry = qToLittleEndian(*reinterpret_cast<quint32*>(&rotLH.y));
+        quint32 rz = qToLittleEndian(*reinterpret_cast<quint32*>(&rotLH.z));
+        quint32 rw = qToLittleEndian(*reinterpret_cast<quint32*>(&rotLH.w));
+        rawData.append(reinterpret_cast<const char*>(&rx), sizeof(quint32));
+        rawData.append(reinterpret_cast<const char*>(&ry), sizeof(quint32));
+        rawData.append(reinterpret_cast<const char*>(&rz), sizeof(quint32));
+        rawData.append(reinterpret_cast<const char*>(&rw), sizeof(quint32));
+
+        // 64-byte interpolation curves
+        uint8_t interp[64]{};
+        for (int i = 0; i < 64; ++i) {
+            interp[i] = (i % 2 == 0) ? 20 : 107;
+        }
+        rawData.append(reinterpret_cast<const char*>(interp), 64);
+    };
+
+    appendBoneKf("BoneA", 0, {1.0f, 2.0f, 3.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+    appendBoneKf("BoneA", 20, {4.0f, 5.0f, 6.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+    appendBoneKf("BoneB", 10, {0.0f, 1.0f, 0.0f}, {0.0f, 0.707107f, 0.0f, 0.707107f});
+
+    // Morph keyframe count: 2
+    quint32 morphCount = qToLittleEndian(static_cast<quint32>(2));
+    rawData.append(reinterpret_cast<const char*>(&morphCount), sizeof(quint32));
+
+    auto appendMorphKf = [&](const QString& name, quint32 frame, float weight) {
+        QByteArray nameBytes = name.toUtf8();
+        nameBytes.append(QByteArray(15 - nameBytes.size(), '\0'));
+        rawData.append(nameBytes);
+
+        quint32 leFrame = qToLittleEndian(frame);
+        rawData.append(reinterpret_cast<const char*>(&leFrame), sizeof(quint32));
+
+        quint32 rawW = qToLittleEndian(*reinterpret_cast<quint32*>(&weight));
+        rawData.append(reinterpret_cast<const char*>(&rawW), sizeof(quint32));
+    };
+
+    appendMorphKf("MorphA", 0, 0.25f);
+    appendMorphKf("MorphB", 35, 0.85f);
+
+    // Ingest via VmdImporter
+    QString err;
+    auto optMotion = VmdImporter::loadFromByteArray(rawData, &err);
+    QVERIFY2(optMotion.has_value(), qPrintable(err));
+
+    const auto& motion = *optMotion;
+    QVERIFY(motion.version.startsWith("Vocaloid Motion Data"));
+    QCOMPARE(motion.modelName, QStringLiteral("TestModel"));
+    QCOMPARE(motion.boneKeyframes.size(), size_t(3));
+    QCOMPARE(motion.morphKeyframes.size(), size_t(2));
+    QCOMPARE(motion.maxFrame, quint32(35));
+
+    // Verify bone keyframe coordinate conversion (LH to RH)
+    // BoneA frame 0: LH (1, 2, 3) -> RH (1, 2, -3)
+    QCOMPARE(motion.boneKeyframes[0].boneName, QStringLiteral("BoneA"));
+    QCOMPARE(motion.boneKeyframes[0].frame, quint32(0));
+    QVERIFY(std::abs(motion.boneKeyframes[0].translation.x - 1.0f) < 1e-4f);
+    QVERIFY(std::abs(motion.boneKeyframes[0].translation.y - 2.0f) < 1e-4f);
+    QVERIFY(std::abs(motion.boneKeyframes[0].translation.z - (-3.0f)) < 1e-4f);
+
+    // BoneA frame 20: LH (4, 5, 6) -> RH (4, 5, -6)
+    QCOMPARE(motion.boneKeyframes[1].boneName, QStringLiteral("BoneA"));
+    QCOMPARE(motion.boneKeyframes[1].frame, quint32(20));
+    QVERIFY(std::abs(motion.boneKeyframes[1].translation.x - 4.0f) < 1e-4f);
+    QVERIFY(std::abs(motion.boneKeyframes[1].translation.y - 5.0f) < 1e-4f);
+    QVERIFY(std::abs(motion.boneKeyframes[1].translation.z - (-6.0f)) < 1e-4f);
+
+    // BoneB frame 10: LH rot (0, 0.707107, 0, 0.707107) -> RH rot (w, -x, -y, z) = (0.707107, 0, -0.707107, 0)
+    QCOMPARE(motion.boneKeyframes[2].boneName, QStringLiteral("BoneB"));
+    QCOMPARE(motion.boneKeyframes[2].frame, quint32(10));
+    QVERIFY(std::abs(motion.boneKeyframes[2].rotation.w - 0.707107f) < 1e-4f);
+    QVERIFY(std::abs(motion.boneKeyframes[2].rotation.y - (-0.707107f)) < 1e-4f);
+
+    // Verify morphs
+    QCOMPARE(motion.morphKeyframes[0].morphName, QStringLiteral("MorphA"));
+    QCOMPARE(motion.morphKeyframes[0].frame, quint32(0));
+    QVERIFY(std::abs(motion.morphKeyframes[0].weight - 0.25f) < 1e-4f);
+
+    QCOMPARE(motion.morphKeyframes[1].morphName, QStringLiteral("MorphB"));
+    QCOMPARE(motion.morphKeyframes[1].frame, quint32(35));
+    QVERIFY(std::abs(motion.morphKeyframes[1].weight - 0.85f) < 1e-4f);
+}
+
+void TstPmxEvaluator::testVmdInterpolationEvaluation() {
+    // Keyframe 0: t = (0, 0, 0), q = identity
+    // Keyframe 30: t = (0, 10, 0), q = rotY(90 deg)
+    VmdBoneKeyframe kf0;
+    kf0.boneName = "TestBone";
+    kf0.frame = 0;
+    kf0.translation = glm::vec3(0.0f, 0.0f, 0.0f);
+    kf0.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+    VmdBoneKeyframe kf1;
+    kf1.boneName = "TestBone";
+    kf1.frame = 30;
+    kf1.translation = glm::vec3(0.0f, 10.0f, 0.0f);
+    kf1.rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+
+    VmdMotion motion;
+    motion.boneKeyframes = {kf0, kf1};
+    motion.maxFrame = 30;
+
+    PmxAnimationPlayer player;
+    player.loadMotion(motion);
+    player.setFrame(15.0f);
+
+    glm::vec3 t = player.evaluateBoneTranslation("TestBone", 15.0f);
+    glm::quat q = player.evaluateBoneRotation("TestBone", 15.0f);
+
+    // Assert translation Y in [4.9, 5.1]
+    QVERIFY2(t.y >= 4.9f && t.y <= 5.1f,
+             qPrintable(QString("Translation Y was %1, expected in [4.9, 5.1]").arg(t.y)));
+    QVERIFY(std::abs(t.x) < 1e-4f);
+    QVERIFY(std::abs(t.z) < 1e-4f);
+
+    // Assert rotation angle ~ 45 degrees
+    float angleRad = 2.0f * std::acos(std::clamp(q.w, -1.0f, 1.0f));
+    float angleDeg = glm::degrees(angleRad);
+    QVERIFY2(std::abs(angleDeg - 45.0f) < 0.5f,
+             qPrintable(QString("Rotation angle was %1 deg, expected ~45 deg").arg(angleDeg)));
+
+    // Also apply to scene and verify runtime bone transforms
+    PmxDocument doc;
+    PmxBone bone;
+    bone.nameJp = "TestBone";
+    bone.position = {0.0f, 0.0f, 0.0f};
+    doc.bones = {bone};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+    player.applyToScene(scene);
+
+    QVERIFY(scene.bone(0).userTranslation.y >= 4.9f && scene.bone(0).userTranslation.y <= 5.1f);
+    float sceneAngleDeg = glm::degrees(2.0f * std::acos(std::clamp(scene.bone(0).userRotation.w, -1.0f, 1.0f)));
+    QVERIFY(std::abs(sceneAngleDeg - 45.0f) < 0.5f);
+}
+
+void TstPmxEvaluator::testVpdTextPoseImport() {
+    QByteArray vpdData =
+        "Vocaloid Pose Data file\r\n\r\n"
+        "YYB_Miku.osm; // 親ファイル名\r\n"
+        "2; // 総ポーズボーン数\r\n\r\n"
+        "Bone0{Center\r\n"
+        "  1.000000,2.000000,3.000000;\r\n"
+        "  0.000000,0.000000,0.000000,1.000000;\r\n"
+        "}\r\n\r\n"
+        "Bone1{Arm\r\n"
+        "  0.000000,5.000000,0.000000;\r\n"
+        "  0.000000,0.707107,0.000000,0.707107;\r\n"
+        "}\r\n\r\n"
+        "Morph0{Smile\r\n"
+        "  0.850000;\r\n"
+        "}\r\n";
+
+    QString err;
+    auto optPose = VpdImporter::loadFromByteArray(vpdData, &err);
+    QVERIFY2(optPose.has_value(), qPrintable(err));
+
+    const auto& pose = *optPose;
+    QCOMPARE(pose.modelName, QStringLiteral("YYB_Miku.osm"));
+    QCOMPARE(pose.bones.size(), size_t(2));
+    QCOMPARE(pose.morphs.size(), size_t(1));
+
+    // Create scene and apply pose
+    PmxDocument doc;
+    PmxBone b0;
+    b0.nameJp = "Center";
+    PmxBone b1;
+    b1.nameJp = "Arm";
+    doc.bones = {b0, b1};
+
+    PmxMorph m0;
+    m0.nameJp = "Smile";
+    m0.morphType = 1;
+    doc.morphs = {m0};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    VpdImporter::applyToScene(pose, scene);
+
+    // Verify Center bone: LH (1, 2, 3) -> RH (1, 2, -3)
+    QVERIFY(std::abs(scene.bone(0).userTranslation.x - 1.0f) < 1e-4f);
+    QVERIFY(std::abs(scene.bone(0).userTranslation.y - 2.0f) < 1e-4f);
+    QVERIFY(std::abs(scene.bone(0).userTranslation.z - (-3.0f)) < 1e-4f);
+    QVERIFY(std::abs(scene.bone(0).userRotation.w - 1.0f) < 1e-4f);
+
+    // Verify Arm bone: translation (0, 5, 0), rot (0.707107, 0, -0.707107, 0)
+    QVERIFY(std::abs(scene.bone(1).userTranslation.y - 5.0f) < 1e-4f);
+    QVERIFY(std::abs(scene.bone(1).userRotation.w - 0.707107f) < 1e-4f);
+    QVERIFY(std::abs(scene.bone(1).userRotation.y - (-0.707107f)) < 1e-4f);
+
+    // Verify morph weight
+    QVERIFY(std::abs(scene.morphWeight(0) - 0.85f) < 1e-4f);
+}
+
+void TstPmxEvaluator::testVmdIkSwitchingTimeline() {
+    PmxDocument doc;
+    PmxBone boneIk;
+    boneIk.nameJp = "LegIK";
+    boneIk.boneFlags = 0x0020; // Has IK
+    boneIk.ikTargetBoneIndex = 1;
+
+    PmxBone boneTarget;
+    boneTarget.nameJp = "LegTarget";
+
+    doc.bones = {boneIk, boneTarget};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+    QVERIFY(scene.isIkEnabled(0));
+
+    // Construct VMD with IK enable switch keyframes at frame 0 (enabled) and frame 10 (disabled)
+    VmdMotion motion;
+    VmdIkKeyframe ikKf0;
+    ikKf0.frame = 0;
+    ikKf0.ikToggles.push_back({"LegIK", true});
+
+    VmdIkKeyframe ikKf10;
+    ikKf10.frame = 10;
+    ikKf10.ikToggles.push_back({"LegIK", false});
+
+    motion.ikKeyframes = {ikKf0, ikKf10};
+    motion.maxFrame = 20;
+
+    PmxAnimationPlayer player;
+    player.loadMotion(motion);
+
+    // Evaluate player at frame 5 (IK enabled)
+    player.setFrame(5.0f);
+    player.applyToScene(scene);
+    QVERIFY(scene.isIkEnabled(0));
+
+    // Evaluate player at frame 15 (IK disabled)
+    player.setFrame(15.0f);
+    player.applyToScene(scene);
+    QVERIFY(!scene.isIkEnabled(0));
+
+    // Evaluate back at frame 2
+    player.setFrame(2.0f);
+    player.applyToScene(scene);
+    QVERIFY(scene.isIkEnabled(0));
+}
+
+void TstPmxEvaluator::testAnimationPlaybackDeltaUpdate() {
+    VmdMotion motion;
+    motion.maxFrame = 60;
+
+    PmxAnimationPlayer player;
+    player.loadMotion(motion);
+    player.setFrame(0.0f);
+    QCOMPARE(player.currentFrame(), 0.0f);
+
+    player.play();
+    QVERIFY(player.isPlaying());
+
+    // Advance by 1/30s -> exactly 1.0 frame
+    player.update(1.0f / 30.0f);
+    QVERIFY2(std::abs(player.currentFrame() - 1.0f) < 1e-4f,
+             qPrintable(QString("Current frame was %1, expected 1.0").arg(player.currentFrame())));
+
+    // Advance by another 0.5s -> 15.0 frames
+    player.update(0.5f);
+    QVERIFY2(std::abs(player.currentFrame() - 16.0f) < 1e-4f,
+             qPrintable(QString("Current frame was %1, expected 16.0").arg(player.currentFrame())));
+
+    // Pause: frame should not advance on update
+    player.pause();
+    QVERIFY(!player.isPlaying());
+    player.update(0.5f);
+    QVERIFY2(std::abs(player.currentFrame() - 16.0f) < 1e-4f,
+             qPrintable(QString("Frame advanced while paused: %1").arg(player.currentFrame())));
+
+    // Stop: frame should reset to 0 and stop playing
+    player.stop();
+    QVERIFY(!player.isPlaying());
+    QCOMPARE(player.currentFrame(), 0.0f);
+}
+
+void TstPmxEvaluator::testVmdCubicBezierNonLinear() {
+    // Default linear: {20, 20, 107, 107}
+    uint8_t linearInterp[4] = {20, 20, 107, 107};
+    QCOMPARE(PmxAnimationPlayer::evaluateBezier(linearInterp, 0.0f), 0.0f);
+    QCOMPARE(PmxAnimationPlayer::evaluateBezier(linearInterp, 1.0f), 1.0f);
+    QVERIFY(std::abs(PmxAnimationPlayer::evaluateBezier(linearInterp, 0.5f) - 0.5f) < 1e-4f);
+    QVERIFY(std::abs(PmxAnimationPlayer::evaluateBezier(linearInterp, 0.25f) - 0.25f) < 1e-4f);
+
+    // Steep ease-in / ease-out (S-curve): x1=127, y1=0, x2=0, y2=127
+    uint8_t sCurve[4] = {127, 0, 0, 127};
+    float midY = PmxAnimationPlayer::evaluateBezier(sCurve, 0.5f);
+    QVERIFY2(std::abs(midY - 0.5f) < 1e-3f,
+             qPrintable(QString("S-curve midpoint was %1, expected ~0.5").arg(midY)));
+
+    // Near start (t=0.2), ease-in should be significantly slower than linear (< 0.2)
+    float earlyY = PmxAnimationPlayer::evaluateBezier(sCurve, 0.2f);
+    QVERIFY2(earlyY < 0.15f, qPrintable(QString("Ease-in early Y was %1, expected < 0.15").arg(earlyY)));
+
+    // Clamping boundary tests
+    QCOMPARE(PmxAnimationPlayer::evaluateBezier(linearInterp, -0.5f), 0.0f);
+    QCOMPARE(PmxAnimationPlayer::evaluateBezier(linearInterp, 1.5f), 1.0f);
+}
+
+void TstPmxEvaluator::testVmdRoundtrip() {
+    VmdMotion srcMotion;
+    srcMotion.version = "Vocaloid Motion Data 0002";
+    srcMotion.modelName = "MikuRoundtrip";
+
+    VmdBoneKeyframe bk0;
+    bk0.boneName = "Root";
+    bk0.frame = 0;
+    bk0.translation = {1.0f, 2.0f, 3.0f};
+    bk0.rotation = glm::angleAxis(glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+
+    VmdBoneKeyframe bk1;
+    bk1.boneName = "Root";
+    bk1.frame = 30;
+    bk1.translation = {5.0f, 6.0f, 7.0f};
+    bk1.rotation = glm::angleAxis(glm::radians(60.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+
+    srcMotion.boneKeyframes = {bk0, bk1};
+
+    VmdMorphKeyframe mk0;
+    mk0.morphName = "Blink";
+    mk0.frame = 0;
+    mk0.weight = 0.1f;
+
+    VmdMorphKeyframe mk1;
+    mk1.morphName = "Blink";
+    mk1.frame = 15;
+    mk1.weight = 0.9f;
+
+    srcMotion.morphKeyframes = {mk0, mk1};
+
+    VmdIkKeyframe ikKf;
+    ikKf.frame = 10;
+    ikKf.showModel = true;
+    ikKf.ikToggles.push_back({"LeftLegIK", true});
+    ikKf.ikToggles.push_back({"RightLegIK", false});
+    srcMotion.ikKeyframes = {ikKf};
+    srcMotion.maxFrame = 30;
+
+    QByteArray bytes = VmdImporter::writeToByteArray(srcMotion);
+    QString err;
+    auto dstMotionOpt = VmdImporter::loadFromByteArray(bytes, &err);
+    QVERIFY2(dstMotionOpt.has_value(), qPrintable(err));
+
+    const auto& dst = *dstMotionOpt;
+    QCOMPARE(dst.modelName, srcMotion.modelName);
+    QCOMPARE(dst.maxFrame, srcMotion.maxFrame);
+    QCOMPARE(dst.boneKeyframes.size(), srcMotion.boneKeyframes.size());
+    QCOMPARE(dst.morphKeyframes.size(), srcMotion.morphKeyframes.size());
+    QCOMPARE(dst.ikKeyframes.size(), srcMotion.ikKeyframes.size());
+
+    // Verify bone values roundtrip exactly
+    for (size_t i = 0; i < srcMotion.boneKeyframes.size(); ++i) {
+        const auto& s = srcMotion.boneKeyframes[i];
+        const auto& d = dst.boneKeyframes[i];
+        QCOMPARE(d.boneName, s.boneName);
+        QCOMPARE(d.frame, s.frame);
+        QVERIFY(glm::distance(d.translation, s.translation) < 1e-4f);
+        QVERIFY(std::abs(glm::dot(d.rotation, s.rotation)) > 0.999f);
+    }
+
+    // Verify morphs roundtrip
+    for (size_t i = 0; i < srcMotion.morphKeyframes.size(); ++i) {
+        const auto& s = srcMotion.morphKeyframes[i];
+        const auto& d = dst.morphKeyframes[i];
+        QCOMPARE(d.morphName, s.morphName);
+        QCOMPARE(d.frame, s.frame);
+        QVERIFY(std::abs(d.weight - s.weight) < 1e-4f);
+    }
+
+    // Verify IK toggles roundtrip
+    QCOMPARE(dst.ikKeyframes[0].frame, ikKf.frame);
+    QCOMPARE(dst.ikKeyframes[0].ikToggles.size(), size_t(2));
+    QCOMPARE(dst.ikKeyframes[0].ikToggles[0].ikBoneName, QStringLiteral("LeftLegIK"));
+    QCOMPARE(dst.ikKeyframes[0].ikToggles[0].enable, true);
+    QCOMPARE(dst.ikKeyframes[0].ikToggles[1].ikBoneName, QStringLiteral("RightLegIK"));
+    QCOMPARE(dst.ikKeyframes[0].ikToggles[1].enable, false);
+}
+
+void TstPmxEvaluator::testVpdRoundtrip() {
+    VpdPose src;
+    src.modelName = "MikuPose";
+
+    VpdBonePose bp0;
+    bp0.boneName = "Root";
+    bp0.translation = {1.5f, 2.5f, -3.5f};
+    bp0.rotation = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+
+    VpdBonePose bp1;
+    bp1.boneName = "Head";
+    bp1.translation = {0.0f, 10.0f, 0.0f};
+    bp1.rotation = glm::angleAxis(glm::radians(-20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+
+    src.bones = {bp0, bp1};
+
+    VpdMorphPose mp0;
+    mp0.morphName = "Smile";
+    mp0.weight = 0.77f;
+    src.morphs = {mp0};
+
+    QByteArray bytes = VpdImporter::writeToByteArray(src);
+    QString err;
+    auto dstOpt = VpdImporter::loadFromByteArray(bytes, &err);
+    QVERIFY2(dstOpt.has_value(), qPrintable(err));
+
+    const auto& dst = *dstOpt;
+    QCOMPARE(dst.modelName, src.modelName);
+    QCOMPARE(dst.bones.size(), src.bones.size());
+    QCOMPARE(dst.morphs.size(), src.morphs.size());
+
+    for (size_t i = 0; i < src.bones.size(); ++i) {
+        QCOMPARE(dst.bones[i].boneName, src.bones[i].boneName);
+        QVERIFY(glm::distance(dst.bones[i].translation, src.bones[i].translation) < 1e-4f);
+        QVERIFY(std::abs(glm::dot(dst.bones[i].rotation, src.bones[i].rotation)) > 0.999f);
+    }
+
+    QCOMPARE(dst.morphs[0].morphName, src.morphs[0].morphName);
+    QVERIFY(std::abs(dst.morphs[0].weight - src.morphs[0].weight) < 1e-4f);
+}
+
+void TstPmxEvaluator::testAnimationPlayerLooping() {
+    VmdMotion motion;
+    motion.maxFrame = 10;
+
+    PmxAnimationPlayer player;
+    player.loadMotion(motion);
+    player.setLoop(true);
+    QVERIFY(player.isLoop());
+
+    player.play();
+    player.setFrame(9.5f);
+    // 1 frame advance -> 10.5 -> loops to 0.5
+    player.update(1.0f / 30.0f);
+    QVERIFY(player.isPlaying());
+    QVERIFY2(std::abs(player.currentFrame() - 0.5f) < 1e-4f,
+             qPrintable(QString("Current frame was %1, expected 0.5").arg(player.currentFrame())));
+
+    // Non-looping: reaches maxFrame and stops
+    player.setLoop(false);
+    player.setFrame(9.5f);
+    player.update(1.0f / 30.0f);
+    QVERIFY(!player.isPlaying());
+    QCOMPARE(player.currentFrame(), 10.0f);
+}
+
+void TstPmxEvaluator::testAnimationPlayerNanHandling() {
+    float nanVal = std::numeric_limits<float>::quiet_NaN();
+    float infVal = std::numeric_limits<float>::infinity();
+
+    // 1. evaluateBezier with NaN, Inf, and out-of-range inputs
+    uint8_t interp[4] = {20, 20, 107, 107};
+    QCOMPARE(PmxAnimationPlayer::evaluateBezier(interp, nanVal), 0.0f);
+    QCOMPARE(PmxAnimationPlayer::evaluateBezier(interp, -1.0f), 0.0f);
+    QCOMPARE(PmxAnimationPlayer::evaluateBezier(interp, infVal), 1.0f);
+
+    // 2. Player loaded with multiple keyframes
+    VmdMotion motion;
+    VmdBoneKeyframe bk0;
+    bk0.boneName = "Arm";
+    bk0.frame = 10;
+    bk0.translation = {1.0f, 2.0f, 3.0f};
+    bk0.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+    VmdBoneKeyframe bk1;
+    bk1.boneName = "Arm";
+    bk1.frame = 30;
+    bk1.translation = {4.0f, 5.0f, 6.0f};
+    bk1.rotation = glm::quat(0.707107f, 0.0f, 0.707107f, 0.0f);
+
+    motion.boneKeyframes = {bk0, bk1};
+
+    VmdMorphKeyframe mk0;
+    mk0.morphName = "Blink";
+    mk0.frame = 10;
+    mk0.weight = 0.2f;
+
+    VmdMorphKeyframe mk1;
+    mk1.morphName = "Blink";
+    mk1.frame = 30;
+    mk1.weight = 0.8f;
+
+    motion.morphKeyframes = {mk0, mk1};
+
+    VmdIkKeyframe ik0;
+    ik0.frame = 10;
+    ik0.ikToggles.push_back({"LegIK", true});
+
+    VmdIkKeyframe ik1;
+    ik1.frame = 30;
+    ik1.ikToggles.push_back({"LegIK", false});
+
+    motion.ikKeyframes = {ik0, ik1};
+    motion.maxFrame = 40;
+
+    PmxAnimationPlayer player;
+    player.loadMotion(motion);
+
+    // Test setFrame with NaN and negative: should reset to 0.0f without crash
+    player.setFrame(nanVal);
+    QCOMPARE(player.currentFrame(), 0.0f);
+    player.setFrame(-5.0f);
+    QCOMPARE(player.currentFrame(), 0.0f);
+
+    // Test evaluateBoneTranslation with NaN: should safely return track.front().translation
+    glm::vec3 tNan = player.evaluateBoneTranslation("Arm", nanVal);
+    QCOMPARE(tNan, bk0.translation);
+
+    // Test evaluateBoneRotation with NaN: should safely return track.front().rotation
+    glm::quat qNan = player.evaluateBoneRotation("Arm", nanVal);
+    QCOMPARE(qNan, bk0.rotation);
+
+    // Test evaluateMorphWeight with NaN: should safely return track.front().weight
+    float wNan = player.evaluateMorphWeight("Blink", nanVal);
+    QCOMPARE(wNan, mk0.weight);
+
+    // Test evaluateIkState with NaN: should safely return first keyframe state
+    bool ikNan = player.evaluateIkState("LegIK", nanVal);
+    QCOMPARE(ikNan, true);
+
+    // Test update with NaN: should not crash and should not advance
+    player.play();
+    player.setFrame(10.0f);
+    player.update(nanVal);
+    QCOMPARE(player.currentFrame(), 10.0f);
+
+    // Test applyToScene with NaN currentFrame: should not crash
+    PmxDocument doc;
+    PmxBone b;
+    b.nameJp = "Arm";
+    doc.bones = {b};
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    player.setFrame(nanVal);
+    player.applyToScene(scene);
+    QCOMPARE(scene.bone(0).userTranslation, bk0.translation);
+}
+
+void TstPmxEvaluator::testVmdMalformedBufferRejection() {
+    QString err;
+
+    // 1. Buffer smaller than minimum header size (< 50 bytes)
+    QByteArray tiny(30, '\0');
+    QVERIFY(!VmdImporter::loadFromByteArray(tiny, &err).has_value());
+
+    // 2. Buffer with invalid signature
+    QByteArray badSig(60, '\0');
+    std::memcpy(badSig.data(), "Invalid Motion Data Header!!", 28);
+    QVERIFY(!VmdImporter::loadFromByteArray(badSig, &err).has_value());
+
+    // 3. Buffer claiming huge boneCount (0x7FFFFFFF) beyond file size -> must reject, no bad_alloc
+    QByteArray hugeBones;
+    QByteArray header = "Vocaloid Motion Data 0002";
+    header.append(QByteArray(30 - header.size(), '\0'));
+    hugeBones.append(header);
+    hugeBones.append(QByteArray(20, '\0')); // model name
+    quint32 hugeCount = qToLittleEndian(static_cast<quint32>(0x7FFFFFFF));
+    hugeBones.append(reinterpret_cast<const char*>(&hugeCount), sizeof(quint32));
+    QVERIFY(!VmdImporter::loadFromByteArray(hugeBones, &err).has_value());
+
+    // 4. Truncated bone keyframe record (count=1, but only 20 bytes payload instead of 111)
+    QByteArray truncBone = header;
+    truncBone.append(QByteArray(20, '\0'));
+    quint32 oneBone = qToLittleEndian(static_cast<quint32>(1));
+    truncBone.append(reinterpret_cast<const char*>(&oneBone), sizeof(quint32));
+    truncBone.append(QByteArray(20, 'A')); // Only 20 bytes instead of 111
+    QVERIFY(!VmdImporter::loadFromByteArray(truncBone, &err).has_value());
+
+    // 5. Valid bone and morph, but huge ikCount (0x7FFFFFFF) -> must reject, no bad_alloc
+    QByteArray hugeIk = header;
+    hugeIk.append(QByteArray(20, '\0')); // model
+    quint32 zero = 0;
+    hugeIk.append(reinterpret_cast<const char*>(&zero), sizeof(quint32)); // bone count = 0
+    hugeIk.append(reinterpret_cast<const char*>(&zero), sizeof(quint32)); // morph count = 0
+    hugeIk.append(reinterpret_cast<const char*>(&zero), sizeof(quint32)); // camera count = 0
+    hugeIk.append(reinterpret_cast<const char*>(&zero), sizeof(quint32)); // light count = 0
+    hugeIk.append(reinterpret_cast<const char*>(&zero), sizeof(quint32)); // shadow count = 0
+    hugeIk.append(reinterpret_cast<const char*>(&hugeCount), sizeof(quint32)); // ikCount = 0x7FFFFFFF
+    QVERIFY(!VmdImporter::loadFromByteArray(hugeIk, &err).has_value());
+
+    // 6. Huge camera count beyond buffer
+    QByteArray hugeCam = header;
+    hugeCam.append(QByteArray(20, '\0'));
+    hugeCam.append(reinterpret_cast<const char*>(&zero), sizeof(quint32)); // bone count = 0
+    hugeCam.append(reinterpret_cast<const char*>(&zero), sizeof(quint32)); // morph count = 0
+    hugeCam.append(reinterpret_cast<const char*>(&hugeCount), sizeof(quint32)); // camera count = 0x7FFFFFFF
+    QVERIFY(!VmdImporter::loadFromByteArray(hugeCam, &err).has_value());
 }
 
 QTEST_MAIN(TstPmxEvaluator)
