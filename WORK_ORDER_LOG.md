@@ -539,3 +539,55 @@
   - Add `friend class PmxVertexWeightCommand;` to `PmxDocumentController.h`.
   - Add explicit BDEF2 weight initialization safeguard before BDEF4 elevation in `PmxWeightPaintBrush.cpp`.
 
+---
+
+### Ticket 3.6: Regression Bugfix — Shaded Mesh Geometry Distortion & Render Pipeline Remediation
+* **Assigned Subagent:** `pmx_ui_engineer`
+* **Target Subsystems:** `PmxViewport` (`src/viewport/PmxViewportItem.h/.cpp`, `src/viewport/shaders/mesh.vert`, `src/viewport/shaders/pmx_edge.vert`, `tests/tst_pmx_viewport.cpp`)
+* **Date Issued:** 2026-10-25 05:20 UTC
+* **Status:** `[ACTIVE]`
+* **Incident / Problem Statement:**
+  - Regression reported during interactive testing with `/home/oscarc/Documents/3D Objects/Barbara/Barbara.pmx` (15,601 vertices, 20 materials, 282 bones).
+  - In **Weight Paint Mode**, geometry renders 100% cleanly and correctly using `m_heatmapPipeline` (draws indexed full mesh with `lines.vert` / `lines.frag`).
+  - In **Shaded Mode**, geometry is severely distorted/scrambled, showing giant black planar artifacts and exploded polygons stretching across the viewport.
+* **Diagnostic & Implementation Directives:**
+  1. **Direct Model Investigation:**
+     - Load `/home/oscarc/Documents/3D Objects/Barbara/Barbara.pmx` in a diagnostic test or unit test harness.
+     - Inspect `mat.edgeSize`, `mat.drawFlags`, `mat.edgeColor` across all 20 materials, and `v.edgeScale`, `v.normal`, `v.position` across vertices.
+  2. **Isolate Shaded Mode Pipeline Components:**
+     - Test disabling the inverted-hull edge outline pass (`m_edgePipeline` in lines 623–633 of `PmxViewportItem.cpp`). Does Shaded mode render cleanly when the edge pass is omitted?
+     - If the edge outline pass is the culprit, identify why `pmx_edge.vert` extrudes gigantic black polygons:
+       - Check `u_edgeParams.x * inEdgeScale * 0.01` with actual PMX values.
+       - Check whether `inNormal` in `MeshVertex` is unnormalized, non-finite, or zero.
+       - Check whether front-face culling (`m_edgePipeline->setCullMode(QRhiGraphicsPipeline::Front)`) vs. triangle winding (`CW` vs `CCW`) is properly configured for the LH $\to$ RH reflection ($z \to -z$).
+       - Check whether depth write (`m_edgePipeline->setDepthWrite(true)`) conflicts with the main pass.
+       - Expose a user toggle `showEdgeOutlines` (default true) and clamp extrusion displacement to safe finite bounds.
+     - If the main mesh pass (`m_meshPipelineCullBack` / `mesh.vert`) is the culprit:
+       - Verify `MeshVertex` stride (36B) and attribute alignment on the GPU.
+       - Verify `cb->drawIndexed(gb.staged.indexCount, 1, gb.staged.indexOffset, 0)` offsets and buffer indexing.
+  3. **Verification Suite:**
+     - Add non-hollow unit tests in `tests/tst_pmx_viewport.cpp` covering real-world multi-material models, edge extrusion clamping, and batch draw offsets.
+     - Verify all 7 CTest suites pass 100% cleanly under ASan/UBSan.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+#### Ticket 3.6 — Revision 2 (Strike 1 Remediation & Pipeline Binding Order Fix)
+* **Date & Timestamp:** 2026-10-25 06:25 UTC
+* **Reason for Revision:**
+  - Strike 1 audit failure detected by `pmx_qa_adversary`:
+    1. **Runtime Rendering Distortion:** In shaded mode, a massive distorted wedge covers the right quadrant of the viewport. In contrast, heatmap mode (`viewportMode == 2`) with `LineVertex` renders Barbara 100% cleanly and without distortion.
+    2. **Hollow Tests:** `testBarbaraModelLoadingAndDiagnostics` in `tests/tst_pmx_viewport.cpp` asserted CPU staging math without testing offscreen GPU rendering.
+    3. **Division by Zero in `mesh.vert`:** `normView = normalize(mat3(u_normalMatrix) * inNormal)` caused `NaN` propagation on degenerate/zero-length normals.
+    4. **QML Startup TypeErrors:** Missing null-safety guards when QML views access `bridge.controller` prior to model load.
+* **Architectural Diagnosis & Directives:**
+  1. **Pipeline & Vertex Input Binding Order in `PmxViewportItem.cpp`:**
+     - In `PmxRhiRenderer::render`, `cb->setVertexInput` must be called **AFTER** `cb->setGraphicsPipeline(pipe)`, NOT before. In OpenGL Core (`QRhiGles2`), calling `setGraphicsPipeline` binds a new VAO; calling `setVertexInput` before pipeline switch leaves the new VAO without valid vertex attribute pointers, corrupting vertex fetches!
+     - In both the main shaded loop and the edge outline loop, ensure `setVertexInput(0, 1, &vInput, m_meshIndexBuffer, 0, QRhiCommandBuffer::IndexUInt32)` is explicitly bound for each pipeline prior to `drawIndexed`.
+  2. **Zero-Length Normal Guard in `src/viewport/shaders/mesh.vert`:**
+     - Replace raw `normalize(mat3(u_normalMatrix) * inNormal)` with safe length-checked normalization matching `pmx_edge.vert`.
+  3. **End-to-End Headless Verification in `tests/tst_pmx_viewport.cpp`:**
+     - Expand `testBarbaraModelLoadingAndDiagnostics` with genuine offscreen/readback or bounding assertions verifying all projected shaded vertices fall strictly within valid camera view bounds ($X \in [200, 620]$).
+  4. **QML Null Guards:**
+     - Add null checks in `Main.qml` and `InspectorPanel.qml` to eliminate the 23 startup `TypeError` warnings.
+
+
+

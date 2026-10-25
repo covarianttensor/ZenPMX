@@ -21,10 +21,13 @@ class PmxViewportItem;
 
 struct MeshVertex {
     glm::vec3 position{0.0f};
-    glm::vec3 normal{0.0f};
-    glm::vec2 uv{0.0f};
     float edgeScale = 1.0f;
+    glm::vec3 normal{0.0f};
+    float pad0 = 0.0f;
+    glm::vec2 uv{0.0f};
+    glm::vec2 pad1{0.0f};
 };
+static_assert(sizeof(MeshVertex) == 48, "MeshVertex must be 48 bytes");
 
 struct StagedMaterialBatch {
     int materialIndex = -1;
@@ -150,6 +153,7 @@ private:
     bool m_showRigidBodies = true;
     bool m_showJoints = true;
     bool m_wireframe = false;
+    bool m_showEdgeOutlines = true;
     int m_viewportMode = 0;
     quint64 m_syncedRevision = 0;
     int m_syncedSelectedBone = -1;
@@ -167,6 +171,7 @@ class PmxViewportItem : public QQuickRhiItem {
     Q_PROPERTY(bool showRigidBodies READ showRigidBodies WRITE setShowRigidBodies NOTIFY showRigidBodiesChanged)
     Q_PROPERTY(bool showJoints READ showJoints WRITE setShowJoints NOTIFY showJointsChanged)
     Q_PROPERTY(bool wireframe READ wireframe WRITE setWireframe NOTIFY wireframeChanged)
+    Q_PROPERTY(bool showEdgeOutlines READ showEdgeOutlines WRITE setShowEdgeOutlines NOTIFY showEdgeOutlinesChanged)
     Q_PROPERTY(int gizmoMode READ gizmoModeInt WRITE setGizmoModeInt NOTIFY gizmoModeChanged)
     Q_PROPERTY(int coordSpace READ coordSpaceInt WRITE setCoordSpaceInt NOTIFY coordSpaceChanged)
     Q_PROPERTY(bool symmetricEditing READ symmetricEditing WRITE setSymmetricEditing NOTIFY symmetricEditingChanged)
@@ -187,7 +192,11 @@ public:
     static std::vector<StagedMaterialBatch> partitionMaterialBatches(const PmxDocument& doc, std::vector<uint32_t>& outStagedIndices);
     static std::vector<MeshVertex> stageVertices(const PmxDocument& doc);
     static inline glm::vec3 calculateEdgeExtrusion(const glm::vec3& position, const glm::vec3& normal, float edgeSize, float edgeScale) {
-        return position + normal * (edgeSize * edgeScale * 0.01f);
+        float len = glm::length(normal);
+        glm::vec3 safeNorm = (std::isfinite(len) && len > 1e-5f) ? (normal / len) : glm::vec3(0.0f);
+        float clampedScale = std::isfinite(edgeScale) ? std::clamp(edgeScale, -100.0f, 100.0f) : 0.0f;
+        float offset = std::clamp(edgeSize * clampedScale * 0.01f, -10.0f, 10.0f);
+        return position + safeNorm * offset;
     }
 
     pmx::PmxDocumentController* controller() const { return m_controller; }
@@ -211,6 +220,9 @@ public:
 
     bool wireframe() const { return m_wireframe; }
     void setWireframe(bool wireframe);
+
+    bool showEdgeOutlines() const { return m_showEdgeOutlines; }
+    void setShowEdgeOutlines(bool show);
 
     int viewportMode() const { return m_viewportMode; }
     void setViewportMode(int mode);
@@ -259,6 +271,7 @@ signals:
     void showRigidBodiesChanged();
     void showJointsChanged();
     void wireframeChanged();
+    void showEdgeOutlinesChanged();
     void viewportModeChanged();
     void brushRadiusChanged();
     void brushStrengthChanged();
@@ -288,6 +301,7 @@ private:
     bool m_showRigidBodies = true;
     bool m_showJoints = true;
     bool m_wireframe = false;
+    bool m_showEdgeOutlines = true;
     int m_viewportMode = 0;
     float m_brushRadius = 1.0f;
     float m_brushStrength = 0.2f;

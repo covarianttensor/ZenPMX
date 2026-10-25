@@ -118,10 +118,9 @@ void PmxRhiRenderer::initialize(QRhiCommandBuffer* cb) {
             { sizeof(MeshVertex) }
         });
         inputLayout.setAttributes({
-            { 0, 0, QRhiVertexInputAttribute::Float3, offsetof(MeshVertex, position) },
-            { 0, 1, QRhiVertexInputAttribute::Float3, offsetof(MeshVertex, normal) },
-            { 0, 2, QRhiVertexInputAttribute::Float2, offsetof(MeshVertex, uv) },
-            { 0, 3, QRhiVertexInputAttribute::Float, offsetof(MeshVertex, edgeScale) }
+            { 0, 0, QRhiVertexInputAttribute::Float4, 0 },
+            { 0, 1, QRhiVertexInputAttribute::Float4, 16 },
+            { 0, 2, QRhiVertexInputAttribute::Float4, 32 }
         });
         pipe->setVertexInputLayout(inputLayout);
         pipe->setShaderResourceBindings(m_dummyLayoutSrb);
@@ -154,10 +153,9 @@ void PmxRhiRenderer::initialize(QRhiCommandBuffer* cb) {
             { sizeof(MeshVertex) }
         });
         inputLayout.setAttributes({
-            { 0, 0, QRhiVertexInputAttribute::Float3, offsetof(MeshVertex, position) },
-            { 0, 1, QRhiVertexInputAttribute::Float3, offsetof(MeshVertex, normal) },
-            { 0, 2, QRhiVertexInputAttribute::Float2, offsetof(MeshVertex, uv) },
-            { 0, 3, QRhiVertexInputAttribute::Float, offsetof(MeshVertex, edgeScale) }
+            { 0, 0, QRhiVertexInputAttribute::Float4, 0 },
+            { 0, 1, QRhiVertexInputAttribute::Float4, 16 },
+            { 0, 2, QRhiVertexInputAttribute::Float4, 32 }
         });
         m_edgePipeline->setVertexInputLayout(inputLayout);
         m_edgePipeline->setShaderResourceBindings(m_dummyLayoutSrb);
@@ -166,7 +164,7 @@ void PmxRhiRenderer::initialize(QRhiCommandBuffer* cb) {
         m_edgePipeline->setCullMode(QRhiGraphicsPipeline::Front);
         m_edgePipeline->setFrontFace(QRhiGraphicsPipeline::CW);
         m_edgePipeline->setDepthTest(true);
-        m_edgePipeline->setDepthWrite(true);
+        m_edgePipeline->setDepthWrite(false);
         m_edgePipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
 
         QRhiGraphicsPipeline::TargetBlend blend;
@@ -288,6 +286,7 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
     m_showRigidBodies = vp->showRigidBodies();
     m_showJoints = vp->showJoints();
     m_wireframe = vp->wireframe();
+    m_showEdgeOutlines = vp->showEdgeOutlines();
     bool modeChanged = (m_viewportMode != vp->viewportMode());
     m_viewportMode = vp->viewportMode();
 
@@ -331,13 +330,11 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
             m_stagedPhysicsLines = PmxWireframeRenderer::buildRigidBodyWireframes(doc, selRb);
             m_stagedJointLines = PmxWireframeRenderer::buildJointWireframes(doc, selJoint);
 
-            if (m_viewportMode == 2) {
-                m_stagedHeatmapVertices.reserve(doc.vertices.size());
-                for (const auto& v : doc.vertices) {
-                    float w = (selBone >= 0) ? PmxWeightPaintBrush::getVertexBoneWeight(v, selBone) : 0.0f;
-                    glm::vec4 col = PmxWeightPaintBrush::weightToColor(w);
-                    m_stagedHeatmapVertices.push_back({ PmxCamera::toRightHanded(v.position), col });
-                }
+            m_stagedHeatmapVertices.reserve(doc.vertices.size());
+            for (const auto& v : doc.vertices) {
+                float w = (selBone >= 0) ? PmxWeightPaintBrush::getVertexBoneWeight(v, selBone) : 0.0f;
+                glm::vec4 col = PmxWeightPaintBrush::weightToColor(w);
+                m_stagedHeatmapVertices.push_back({ PmxCamera::toRightHanded(v.position), col });
             }
         }
 
@@ -605,28 +602,27 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
     } else {
         if (m_meshVertexBuffer && m_meshIndexBuffer && m_meshIndexCount > 0) {
             QRhiCommandBuffer::VertexInput vInput(m_meshVertexBuffer, 0);
-            cb->setVertexInput(0, 1, &vInput, m_meshIndexBuffer, 0, QRhiCommandBuffer::IndexUInt32);
 
             for (const auto& gb : m_gpuBatches) {
-                if (gb.staged.indexCount == 0) continue;
+                if (gb.staged.indexCount == 0 || !gb.srb) continue;
 
-                QRhiGraphicsPipeline* pipeline = gb.staged.doubleSided
-                    ? m_meshPipelineCullNone
-                    : m_meshPipelineCullBack;
-                if (!pipeline) continue;
+                auto* pipe = (gb.staged.doubleSided || m_wireframe) ? m_meshPipelineCullNone : m_meshPipelineCullBack;
+                if (!pipe) pipe = m_meshPipelineCullNone;
 
-                cb->setGraphicsPipeline(pipeline);
+                cb->setGraphicsPipeline(pipe);
                 cb->setShaderResources(gb.srb);
+                cb->setVertexInput(0, 1, &vInput, m_meshIndexBuffer, 0, QRhiCommandBuffer::IndexUInt32);
                 cb->drawIndexed(gb.staged.indexCount, 1, gb.staged.indexOffset, 0);
             }
 
             // 3. Inverted-Hull Edge Outline Pass
-            if (m_edgePipeline) {
+            if (m_showEdgeOutlines && m_edgePipeline) {
                 for (const auto& gb : m_gpuBatches) {
-                    if (!gb.staged.hasEdge || gb.staged.indexCount == 0) continue;
+                    if (!gb.staged.hasEdge || gb.staged.indexCount == 0 || !gb.srb) continue;
 
                     cb->setGraphicsPipeline(m_edgePipeline);
                     cb->setShaderResources(gb.srb);
+                    cb->setVertexInput(0, 1, &vInput, m_meshIndexBuffer, 0, QRhiCommandBuffer::IndexUInt32);
                     cb->drawIndexed(gb.staged.indexCount, 1, gb.staged.indexOffset, 0);
                 }
             }
@@ -734,9 +730,15 @@ std::vector<MeshVertex> PmxViewportItem::stageVertices(const PmxDocument& doc) {
     for (const auto& v : doc.vertices) {
         MeshVertex mv;
         mv.position = PmxCamera::toRightHanded(v.position);
-        mv.normal = PmxCamera::toRightHanded(v.normal);
+        glm::vec3 n_rh = PmxCamera::toRightHanded(v.normal);
+        float len = glm::length(n_rh);
+        if (std::isfinite(len) && len > 1e-5f) {
+            mv.normal = n_rh / len;
+        } else {
+            mv.normal = glm::vec3(0.0f);
+        }
         mv.uv = v.uv;
-        mv.edgeScale = v.edgeScale;
+        mv.edgeScale = std::isfinite(v.edgeScale) ? std::clamp(v.edgeScale, -100.0f, 100.0f) : 0.0f;
         staged.push_back(mv);
     }
     return staged;
@@ -920,6 +922,14 @@ void PmxViewportItem::setWireframe(bool wireframe) {
     if (m_wireframe != wireframe) {
         m_wireframe = wireframe;
         emit wireframeChanged();
+        update();
+    }
+}
+
+void PmxViewportItem::setShowEdgeOutlines(bool show) {
+    if (m_showEdgeOutlines != show) {
+        m_showEdgeOutlines = show;
+        emit showEdgeOutlinesChanged();
         update();
     }
 }

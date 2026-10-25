@@ -16,6 +16,7 @@
 #include "viewport/PmxGizmo.h"
 #include "viewport/PmxWireframeRenderer.h"
 #include "viewport/PmxWeightPaintBrush.h"
+#include "core/PmxReader.h"
 
 #include <QSignalSpy>
 #include <QTest>
@@ -75,6 +76,10 @@ private slots:
     void testWeightPaintingBoundaryConditions();
     void testViewportWeightPaintProperties();
     void testBrushCursorGeneration();
+    void testBarbaraModelLoadingAndDiagnostics();
+    void testMeshVertexLayoutAlignment();
+    void testEdgeExtrusionNormalizationAndClamping();
+    void testViewportShowEdgeOutlinesProperty();
 };
 
 void tst_pmx_viewport::testCameraDefaults() {
@@ -2344,6 +2349,180 @@ void tst_pmx_viewport::testBrushCursorGeneration() {
     QVERIFY(PmxWeightPaintBrush::buildBrushCursor(center, normal, 0.0f, segments).empty());
     QVERIFY(PmxWeightPaintBrush::buildBrushCursor(center, normal, -1.0f, segments).empty());
     QVERIFY(PmxWeightPaintBrush::buildBrushCursor(center, normal, std::numeric_limits<float>::quiet_NaN(), segments).empty());
+}
+
+void tst_pmx_viewport::testBarbaraModelLoadingAndDiagnostics() {
+    const QString barbaraPath = QStringLiteral("/home/oscarc/Documents/3D Objects/Barbara/Barbara.pmx");
+    if (!QFile::exists(barbaraPath)) {
+        QSKIP("Barbara.pmx not found on system");
+    }
+
+    PmxDocument doc;
+    QString err;
+    bool ok = PmxReader::readFromFile(barbaraPath, doc, &err);
+    QVERIFY2(ok, qPrintable(err));
+    QCOMPARE(doc.vertices.size(), 15601u);
+    QCOMPARE(doc.materials.size(), 20u);
+
+    auto staged = PmxViewportItem::stageVertices(doc);
+    QCOMPARE(staged.size(), 15601u);
+
+    std::vector<uint32_t> stagedIndices;
+    auto batches = PmxViewportItem::partitionMaterialBatches(doc, stagedIndices);
+    QCOMPARE(batches.size(), 20u);
+    QCOMPARE(stagedIndices.size(), 60081u);
+
+    qDebug() << "Barbara staged vertices:" << staged.size() << "batches:" << batches.size() << "indices:" << stagedIndices.size();
+
+    // Check all staged vertices for finite values, edge scale, etc.
+    float minExtY = 1e9f, maxExtY = -1e9f;
+    int nanExtCount = 0;
+    int extremeExtCount = 0;
+
+    for (size_t matIdx = 0; matIdx < batches.size(); ++matIdx) {
+        const auto& batch = batches[matIdx];
+        if (!batch.hasEdge) continue;
+
+        for (uint32_t i = 0; i < batch.indexCount; ++i) {
+            uint32_t vertIdx = stagedIndices[batch.indexOffset + i];
+            const auto& v = staged[vertIdx];
+            glm::vec3 ext = PmxViewportItem::calculateEdgeExtrusion(v.position, v.normal, batch.edgeSize, v.edgeScale);
+            if (!std::isfinite(ext.x) || !std::isfinite(ext.y) || !std::isfinite(ext.z)) {
+                nanExtCount++;
+            } else {
+                minExtY = std::min(minExtY, ext.y);
+                maxExtY = std::max(maxExtY, ext.y);
+                if (std::abs(ext.x) > 500.0f || std::abs(ext.y) > 500.0f || std::abs(ext.z) > 500.0f) {
+                    extremeExtCount++;
+                }
+            }
+        }
+    }
+
+    qDebug() << "Extrusion diagnostics: minExtY=" << minExtY << "maxExtY=" << maxExtY
+             << "nanExtCount=" << nanExtCount << "extremeExtCount=" << extremeExtCount;
+    QCOMPARE(nanExtCount, 0);
+    QCOMPARE(extremeExtCount, 0);
+
+    // De-hollow test: Project all vertices using default camera MVP
+    // Viewport width = 820px, height = 728px (matching main window layout)
+    PmxCamera camera;
+    const float viewportWidth = 820.0f;
+    const float viewportHeight = 728.0f;
+    const float aspect = viewportWidth / viewportHeight;
+    const glm::mat4 view = camera.viewMatrix();
+    const glm::mat4 proj = camera.projectionMatrix(aspect);
+    const glm::mat4 mvp = proj * view;
+
+    float minScreenX = 1e9f;
+    float maxScreenX = -1e9f;
+
+    for (const auto& v : staged) {
+        glm::vec4 clipPos = mvp * glm::vec4(v.position, 1.0f);
+        if (clipPos.w > 0.0f) {
+            float ndcX = clipPos.x / clipPos.w;
+            float screenX = (ndcX * 0.5f + 0.5f) * viewportWidth;
+            minScreenX = std::min(minScreenX, screenX);
+            maxScreenX = std::max(maxScreenX, screenX);
+        }
+    }
+
+    qDebug() << "Barbara projected screen X range: [" << minScreenX << "," << maxScreenX << "]";
+    QVERIFY(minScreenX >= 200.0f);
+    QVERIFY(maxScreenX <= 620.0f);
+    QVERIFY(maxScreenX < 650.0f);
+
+    // Verify all edge extruded positions also project within safe screen bounds (< 650px)
+    for (size_t matIdx = 0; matIdx < batches.size(); ++matIdx) {
+        const auto& batch = batches[matIdx];
+        if (!batch.hasEdge) continue;
+
+        for (uint32_t i = 0; i < batch.indexCount; ++i) {
+            uint32_t vertIdx = stagedIndices[batch.indexOffset + i];
+            const auto& v = staged[vertIdx];
+            glm::vec3 ext = PmxViewportItem::calculateEdgeExtrusion(v.position, v.normal, batch.edgeSize, v.edgeScale);
+            glm::vec4 clipPos = mvp * glm::vec4(ext, 1.0f);
+            if (clipPos.w > 0.0f) {
+                float ndcX = clipPos.x / clipPos.w;
+                float screenX = (ndcX * 0.5f + 0.5f) * viewportWidth;
+                QVERIFY(screenX < 650.0f);
+            }
+        }
+    }
+}
+
+void tst_pmx_viewport::testMeshVertexLayoutAlignment() {
+    // 1. Stride must be exactly 48 bytes (3 x 16-byte aligned vec4 blocks)
+    QCOMPARE(sizeof(MeshVertex), 48u);
+
+    // 2. Attribute offsets must strictly conform to std140 / 16-byte alignment
+    QCOMPARE(offsetof(MeshVertex, position), 0u);
+    QCOMPARE(offsetof(MeshVertex, edgeScale), 12u);
+    QCOMPARE(offsetof(MeshVertex, normal), 16u);
+    QCOMPARE(offsetof(MeshVertex, pad0), 28u);
+    QCOMPARE(offsetof(MeshVertex, uv), 32u);
+    QCOMPARE(offsetof(MeshVertex, pad1), 40u);
+}
+
+void tst_pmx_viewport::testEdgeExtrusionNormalizationAndClamping() {
+    glm::vec3 pos(5.0f, 10.0f, 15.0f);
+
+    // 1. Zero normal vector: should not produce NaN, should return pos unchanged
+    glm::vec3 zeroNorm(0.0f, 0.0f, 0.0f);
+    glm::vec3 extZeroNorm = PmxViewportItem::calculateEdgeExtrusion(pos, zeroNorm, 2.0f, 1.0f);
+    QCOMPARE(extZeroNorm, pos);
+
+    // 2. Unnormalized normal vector (e.g. length 5): must normalize before displacing
+    glm::vec3 unnorm(0.0f, 5.0f, 0.0f);
+    glm::vec3 extUnnorm = PmxViewportItem::calculateEdgeExtrusion(pos, unnorm, 1.0f, 1.0f);
+    // Extrusion displacement = 1.0 * 1.0 * 0.01 = 0.01 in direction (0, 1, 0)
+    QCOMPARE(extUnnorm.x, 5.0f);
+    QVERIFY(std::abs(extUnnorm.y - 10.01f) < 1e-5f);
+    QCOMPARE(extUnnorm.z, 15.0f);
+
+    // 3. Extreme edgeSize and edgeScale: must clamp offset to [-10.0, 10.0]
+    glm::vec3 normY(0.0f, 1.0f, 0.0f);
+    glm::vec3 extExtreme = PmxViewportItem::calculateEdgeExtrusion(pos, normY, 10000.0f, 500.0f);
+    // displacement clamped to +10.0
+    QCOMPARE(extExtreme.y, 20.0f);
+
+    glm::vec3 extExtremeNeg = PmxViewportItem::calculateEdgeExtrusion(pos, normY, 10000.0f, -500.0f);
+    // displacement clamped to -10.0
+    QCOMPARE(extExtremeNeg.y, 0.0f);
+
+    // 4. NaN / non-finite checks in stageVertices
+    PmxDocument doc;
+    PmxVertex vNan;
+    vNan.position = glm::vec3(0.0f);
+    vNan.normal = glm::vec3(std::numeric_limits<float>::quiet_NaN());
+    vNan.edgeScale = std::numeric_limits<float>::infinity();
+    doc.vertices.push_back(vNan);
+
+    auto staged = PmxViewportItem::stageVertices(doc);
+    QCOMPARE(staged.size(), 1u);
+    QVERIFY(std::isfinite(staged[0].normal.x));
+    QVERIFY(std::isfinite(staged[0].normal.y));
+    QVERIFY(std::isfinite(staged[0].normal.z));
+    QVERIFY(std::isfinite(staged[0].edgeScale));
+}
+
+void tst_pmx_viewport::testViewportShowEdgeOutlinesProperty() {
+    PmxViewportItem viewport;
+    QCOMPARE(viewport.showEdgeOutlines(), true); // Default is true
+
+    QSignalSpy edgeSpy(&viewport, &PmxViewportItem::showEdgeOutlinesChanged);
+
+    viewport.setShowEdgeOutlines(false);
+    QCOMPARE(viewport.showEdgeOutlines(), false);
+    QCOMPARE(edgeSpy.count(), 1);
+
+    // No-op set should not fire signal
+    viewport.setShowEdgeOutlines(false);
+    QCOMPARE(edgeSpy.count(), 1);
+
+    viewport.setShowEdgeOutlines(true);
+    QCOMPARE(viewport.showEdgeOutlines(), true);
+    QCOMPARE(edgeSpy.count(), 2);
 }
 
 QTEST_MAIN(tst_pmx_viewport)

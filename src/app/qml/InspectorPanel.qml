@@ -44,7 +44,7 @@ Item {
             id: tabBar
             Layout.fillWidth: true
 
-            property bool isJp: bridge.displayLanguage === "Japanese"
+            property bool isJp: (typeof bridge !== "undefined" && bridge) ? bridge.displayLanguage === "Japanese" : false
 
             TabButton {
                 text: tabBar.isJp ? "情報" : "Info"

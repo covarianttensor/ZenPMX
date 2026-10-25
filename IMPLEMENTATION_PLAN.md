@@ -98,6 +98,7 @@ Transform the viewport from a flat diffuse renderer into a production-grade MMD 
 | **Ticket 3.3** | **Interactive 3D Transform Gizmos (Translate/Rotate/Scale) & Symmetric Editing** | `PmxViewport` / `PmxModels` | `pmx_ui_engineer` | `[DONE]` | Ticket 3.2 | `e72f5d7` |
 | **Ticket 3.4** | **Wireframe Visualizers for Bones, Rigid Bodies (Sphere/Box/Capsule) & 6DoF Joints** | `PmxViewport` | `pmx_ui_engineer` | `[DONE]` | Ticket 3.3 | `1b6afef` |
 | **Ticket 3.5** | **Interactive Weight Painting Engine with Heatmap Visualization & Radius/Falloff Brush** | `PmxViewport` / `PmxModels` | `pmx_ui_engineer` | `[DONE]` | Ticket 3.4 | `f9a5312` |
+| **Ticket 3.6** | **Regression Bugfix: Shaded Mesh Geometry Distortion & Edge Pass Remediation** | `PmxViewport` | `pmx_ui_engineer` | `[ACTIVE]` | Ticket 3.5 | In Progress |
 
 ### Detailed Ticket Breakdown for Milestone 3:
 
@@ -124,6 +125,11 @@ Transform the viewport from a flat diffuse renderer into a production-grade MMD 
 #### Ticket 3.5: Interactive Weight Painting Engine with Heatmap Visualization & Radius/Falloff Brush
 * **Target:** `PmxViewport` / `PmxModels` (`src/viewport/PmxWeightPaintBrush.h/.cpp`, `src/viewport/shaders/pmx_weight.frag`)
 * **Objective:** Viewport weight painting mode. Colors vertices using a classic gradient heatmap (Blue=0.0 $\to$ Cyan $\to$ Green $\to$ Yellow $\to$ Red=1.0) for the selected bone. Interactive spherical brush with configurable radius, strength, and falloff curves (linear/gaussian). Real-time normalization of BDEF2/BDEF4 weights pushed to `PmxDocumentController::undoStack()`.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+#### Ticket 3.6: Regression Bugfix — Shaded Mesh Geometry Distortion & Edge Pass Remediation
+* **Target:** `PmxViewport` (`src/viewport/PmxViewportItem.h/.cpp`, `src/viewport/shaders/mesh.vert`, `src/viewport/shaders/pmx_edge.vert`, `tests/tst_pmx_viewport.cpp`)
+* **Objective:** Diagnose and eliminate shaded geometry corruption reported on multi-material models (`Barbara.pmx`). Isolate edge outline pass extrusion math, attribute layout alignment, and batch drawing offsets. Expose edge outline toggle and ensure robust finite bounds clamping.
 * **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
 
 ---

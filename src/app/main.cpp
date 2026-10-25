@@ -7,6 +7,9 @@
 #include <QQmlContext>
 #include <QQuickStyle>
 
+#include <QQuickWindow>
+#include <QTimer>
+
 int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("pmx-editor"));
@@ -25,6 +28,32 @@ int main(int argc, char* argv[]) {
     engine.loadFromModule("PmxEditorApp", "Main");
     if (engine.rootObjects().isEmpty()) {
         return -1;
+    }
+
+    QString openPath;
+    QString screenshotPath;
+    for (int i = 1; i < argc; ++i) {
+        QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == QStringLiteral("--screenshot") && i + 1 < argc) {
+            screenshotPath = QString::fromLocal8Bit(argv[++i]);
+        } else if (!arg.startsWith(QLatin1Char('-'))) {
+            openPath = arg;
+        }
+    }
+
+    if (!openPath.isEmpty()) {
+        bridge.openFile(openPath);
+    }
+
+    if (!screenshotPath.isEmpty()) {
+        auto* win = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+        if (win) {
+            QTimer::singleShot(800, [win, screenshotPath, &app]() {
+                QImage img = win->grabWindow();
+                img.save(screenshotPath);
+                app.quit();
+            });
+        }
     }
 
     return app.exec();

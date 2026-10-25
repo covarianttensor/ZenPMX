@@ -123,7 +123,7 @@ Rectangle {
             id: tableView
             Layout.fillWidth: true
             Layout.fillHeight: true
-            model: bridge.materialModel
+            model: (typeof bridge !== "undefined" && bridge) ? bridge.materialModel : null
             boundsBehavior: Flickable.StopAtBounds
             columnSpacing: 1
             rowSpacing: 1

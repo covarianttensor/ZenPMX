@@ -8,8 +8,8 @@
 ## 1. Project Status Overview
 * **Project Name:** ZenPMX (Native Linux PMX Editor)
 * **GitHub Repository:** [`https://github.com/covarianttensor/ZenPMX`](https://github.com/covarianttensor/ZenPMX) (Public)
-* **Active Phase:** Milestone 4 (Live TransformView: CCDIK, SDEF & Bullet3 Physics)
-* **Active Target:** Milestone 4 Planning & Ticket 4.1 Initialization
+* **Active Phase:** Milestone 3 Stabilization & Regression Remediation
+* **Active Target:** Ticket 3.6 (Bugfix: Shaded Mesh Geometry Distortion & Edge Pass Remediation)
 * **Overall Completion Level:** 75%
 * **Current Working Tree:** Clean (feature commit `f9a5312`)
 * **Test Suite Status:** 7/7 CTest suites passing (126 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.32s)
@@ -48,6 +48,7 @@
 | 2026-10-25 02:35 | **Ticket-3.3** | Viewport / Models (`PmxViewport` / `PmxModels`) | `pmx_ui_engineer` | `e72f5d7` | 7/7 CTest (31/31 QtTest) | ~45k | Interactive 3D gizmos (Translate/Rotate/Scale), ray picking, snapping, symmetry, sparse undo commands. (Strike 1 resolved). |
 | 2026-10-25 04:18 | **Ticket-3.4** | Viewport / Physics (`PmxViewport`) | `pmx_ui_engineer` | `1b6afef` | 7/7 CTest (36/36 QtTest) | ~44k | Wireframe visualizers for bones (octahedron), rigid bodies (sphere/box/capsule), 6DoF joints (cross/limit arcs/anchors). Strike 1 resolved handedness & selection redraw. |
 | 2026-10-25 04:56 | **Ticket-3.5** | Viewport / Models (`PmxViewport` / `PmxModels`) | `pmx_ui_engineer` | `f9a5312` | 7/7 CTest (43/43 QtTest) | ~48k | Interactive weight painting engine, heatmap shaders, radius/falloff brush, multi-bone normalization, sparse undo. Strike 1 resolved test call & encapsulation. |
+| 2026-10-25 05:20 | **Ticket-3.6** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | In Progress | Pending | ~0k | Regression bugfix: Shaded mesh geometry distortion & inverted-hull edge pass remediation on multi-material models (Barbara.pmx). |
 
 ---
 
@@ -193,6 +194,19 @@
 * **Corrective Action:**
   - In strict accordance with Golden Law 5 (The 2-Strike Rule), worker subagent was NOT killed.
   - Architect dispatched targeted remediation feedback to the same worker instance via `send_message`.
+  - Worker resolved all 3 items; QA verified and committed at `f9a5312`.
+
+### Incident 12: Ticket 3.6 Shaded Mesh Distortion & Order of Operations (Strike 1)
+* **Date:** 2026-10-25 06:25 UTC
+* **Subsystem:** `PmxViewport` (`src/viewport/PmxViewportItem.cpp`, `src/viewport/shaders/mesh.vert`, `tests/tst_pmx_viewport.cpp`)
+* **Root Cause:**
+  1. Pipeline binding order defect in `PmxViewportItem.cpp`: `cb->setVertexInput` was invoked *before* `cb->setGraphicsPipeline(pipe)` in the shaded pass, and was omitted entirely in the edge pass. On OpenGL Core (`QRhiGles2`), switching pipelines binds a new VAO without the vertex buffer/attribute bindings, corrupting vertex fetches and stretching the right half of the mesh across the viewport.
+  2. Degenerate normal division by zero in `src/viewport/shaders/mesh.vert` line 39: `normalize(mat3(u_normalMatrix) * inNormal)` causes `NaN` propagation on zero-length normals.
+  3. Textbook hollow test in `tests/tst_pmx_viewport.cpp`: `testBarbaraModelLoadingAndDiagnostics` asserted CPU staging floats without performing offscreen GPU render verification.
+* **Corrective Action:**
+  - In strict accordance with Golden Law 5 (The 2-Strike Rule), `pmx_ui_engineer` is NOT killed.
+  - Lead Architect dispatches exact QA logs and architectural remediation instructions to the same worker instance (`b62d4e55-50dd-4ef9-8346-3cbe7f704986`) via `send_message`.
+
 
 
 

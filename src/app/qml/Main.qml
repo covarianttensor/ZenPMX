@@ -11,7 +11,7 @@ ApplicationWindow {
     height: 800
     minimumWidth: 800
     minimumHeight: 600
-    title: (bridge.currentFilePath !== "" ? bridge.currentFilePath : "Untitled") + (bridge.isModified ? " *" : "") + " - PMX Editor"
+    title: ((bridge && bridge.currentFilePath !== "") ? bridge.currentFilePath : "Untitled") + ((bridge && bridge.isModified) ? " *" : "") + " - PMX Editor"
 
     palette {
         window: "#1e1e20"
@@ -44,9 +44,9 @@ ApplicationWindow {
 
             ToolButton {
                 text: "Save"
-                enabled: bridge.isModified
+                enabled: bridge ? bridge.isModified : false
                 onClicked: {
-                    if (bridge.currentFilePath === "") {
+                    if (!bridge || bridge.currentFilePath === "") {
                         saveDialog.open()
                     } else {
                         bridge.saveFile()
@@ -58,23 +58,23 @@ ApplicationWindow {
 
             ToolButton {
                 text: "Undo"
-                enabled: bridge.canUndo
-                onClicked: bridge.undo()
+                enabled: bridge ? bridge.canUndo : false
+                onClicked: if (bridge) bridge.undo()
             }
 
             ToolButton {
                 text: "Redo"
-                enabled: bridge.canRedo
-                onClicked: bridge.redo()
+                enabled: bridge ? bridge.canRedo : false
+                onClicked: if (bridge) bridge.redo()
             }
 
             ToolSeparator {}
 
             ToolButton {
-                text: bridge.displayLanguage
+                text: bridge ? bridge.displayLanguage : "English"
                 ToolTip.visible: hovered
                 ToolTip.text: "Toggle Japanese / English UI Language"
-                onClicked: bridge.toggleLanguage()
+                onClicked: if (bridge) bridge.toggleLanguage()
             }
 
             ToolSeparator {}
@@ -107,6 +107,12 @@ ApplicationWindow {
                 id: wireframeCheck
                 text: "Wireframe"
                 checked: false
+            }
+
+            CheckBox {
+                id: edgeCheck
+                text: "Edge"
+                checked: true
             }
 
             ToolSeparator {}
@@ -203,7 +209,7 @@ ApplicationWindow {
             Item { Layout.fillWidth: true }
 
             Label {
-                text: bridge.statusMessage
+                text: bridge ? bridge.statusMessage : ""
                 color: "#aaaaaa"
                 elide: Text.ElideRight
                 Layout.maximumWidth: 400
@@ -216,7 +222,7 @@ ApplicationWindow {
         title: "Open PMX Model"
         nameFilters: ["PMX Model Files (*.pmx)", "All Files (*)"]
         onAccepted: {
-            bridge.openFile(selectedFile)
+            if (bridge) bridge.openFile(selectedFile)
         }
     }
 
@@ -226,7 +232,7 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         nameFilters: ["PMX Model Files (*.pmx)", "All Files (*)"]
         onAccepted: {
-            bridge.saveFile(selectedFile)
+            if (bridge) bridge.saveFile(selectedFile)
         }
     }
 
@@ -242,12 +248,13 @@ ApplicationWindow {
             PmxViewportItem {
                 id: viewport
                 anchors.fill: parent
-                controller: bridge.controller
+                controller: (bridge && bridge.controller) ? bridge.controller : null
                 showGrid: gridCheck.checked
                 showBones: bonesCheck.checked
                 showRigidBodies: physicsCheck.checked
                 showJoints: jointsCheck.checked
                 wireframe: wireframeCheck.checked
+                showEdgeOutlines: edgeCheck.checked
                 focus: true
             }
         }
@@ -279,7 +286,7 @@ ApplicationWindow {
             anchors.rightMargin: 8
 
             Label {
-                text: bridge.currentFilePath !== "" ? bridge.currentFilePath : "No file opened"
+                text: (bridge && bridge.currentFilePath !== "") ? bridge.currentFilePath : "No file opened"
                 font.pixelSize: 11
                 color: "#888888"
                 elide: Text.ElideMiddle

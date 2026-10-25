@@ -1,9 +1,8 @@
 #version 450
 
-layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec2 inUV;
-layout(location = 3) in float inEdgeScale;
+layout(location = 0) in vec4 inPosScale;
+layout(location = 1) in vec4 inNormalPad;
+layout(location = 2) in vec4 inUVPad;
 
 layout(std140, binding = 0) uniform FrameAndMaterialUbo {
     mat4 u_mvp;
@@ -33,7 +32,14 @@ layout(location = 2) out vec2 vSphereUV;
 layout(location = 3) out vec3 vViewPos;
 
 void main() {
-    vec3 normView = normalize(mat3(u_normalMatrix) * inNormal);
+    vec3 inPosition = inPosScale.xyz;
+    vec3 inNormal = inNormalPad.xyz;
+    vec2 inUV = inUVPad.xy;
+
+    vec3 nView = mat3(u_normalMatrix) * inNormal;
+    float nLen = length(nView);
+    vec3 normView = (nLen > 1e-4) ? (nView / nLen) : vec3(0.0, 1.0, 0.0);
+
     vSphereUV = vec2(0.5 + 0.5 * normView.x, 0.5 - 0.5 * normView.y);
     vNormal = normView;
     vUV = inUV;
