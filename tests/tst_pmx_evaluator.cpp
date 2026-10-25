@@ -2,6 +2,7 @@
 #include "core/PmxTypes.h"
 #include "evaluator/PmxRuntimeScene.h"
 #include "evaluator/MmdCcdIkSolver.h"
+#include "evaluator/PmxPhysicsEngine.h"
 
 #include <QtTest>
 #include <cmath>
@@ -49,6 +50,15 @@ private slots:
     void testSdefRestPoseIdentity();
     void testSdefRigidRotationInvariance();
     void testSdefDifferentialRotationWithBounds();
+
+    // Bullet3 Physics & 6DoF Spring Tests (Ticket 4.4):
+    void testBulletRigidBodyFreeFall();
+    void testBulletKinematicBoneTracking();
+    void testBulletSpringConstraintStability();
+    void testBulletCollisionFiltering();
+    void testPhysicsSceneReset();
+    void testBulletPhysicsAndBoneMode();
+    void testBulletCompoundEulerRotation();
 };
 
 void TstPmxEvaluator::initTestCase() {
@@ -1275,6 +1285,403 @@ void TstPmxEvaluator::testSdefDifferentialRotationWithBounds() {
              qPrintable(QString("Differential rotation with bounds failed: got (%1, %2, %3), expected (%4, %5, %6)")
                             .arg(actualPos.x).arg(actualPos.y).arg(actualPos.z)
                             .arg(expectedPos.x).arg(expectedPos.y).arg(expectedPos.z)));
+}
+
+void TstPmxEvaluator::testBulletRigidBodyFreeFall() {
+    PmxDocument doc;
+    PmxRigidBody rb;
+    rb.nameJp = "FreeFallBody";
+    rb.boneIndex = -1;
+    rb.shape = 0; // Sphere
+    rb.size = {1.0f, 0.0f, 0.0f};
+    rb.position = {0.0f, 50.0f, 0.0f}; // LH (0, 50, 0) -> RH (0, 50, 0)
+    rb.rotation = {0.0f, 0.0f, 0.0f};
+    rb.mass = 1.0f;
+    rb.linearDamping = 0.0f;
+    rb.angularDamping = 0.0f;
+    rb.physicsMode = 1; // Dynamic Physics
+    doc.rigidBodies = {rb};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    QVERIFY(scene.physicsEngine() != nullptr);
+    QCOMPARE(scene.physicsEngine()->rigidBodyCount(), 1);
+
+    glm::vec3 pos0 = scene.physicsEngine()->rigidBodyPosition(0);
+    QVERIFY(std::abs(pos0.y - 50.0f) < 1e-4f);
+
+    // Step simulation across multiple steps
+    for (int step = 0; step < 10; ++step) {
+        scene.evaluate(1.0f / 60.0f);
+    }
+
+    glm::vec3 posT = scene.physicsEngine()->rigidBodyPosition(0);
+    glm::vec3 velT = scene.physicsEngine()->rigidBodyLinearVelocity(0);
+
+    // Assert falling downward along -Y under gravity
+    QVERIFY2(posT.y < pos0.y, qPrintable(QString("Rigid body did not fall: posT.y=%1 >= pos0.y=%2").arg(posT.y).arg(pos0.y)));
+    QVERIFY2(velT.y < -1.0f, qPrintable(QString("Rigid body linear velocity y=%1 is not negative").arg(velT.y)));
+    QVERIFY(!std::isnan(posT.x) && !std::isnan(posT.y) && !std::isnan(posT.z));
+    QVERIFY(!std::isnan(velT.x) && !std::isnan(velT.y) && !std::isnan(velT.z));
+}
+
+void TstPmxEvaluator::testBulletKinematicBoneTracking() {
+    PmxDocument doc;
+
+    PmxBone bone;
+    bone.nameJp = "KinematicBone";
+    bone.parentBoneIndex = -1;
+    bone.position = {0.0f, 10.0f, 0.0f}; // LH (0, 10, 0) -> RH (0, 10, 0)
+
+    PmxRigidBody rb;
+    rb.nameJp = "KinematicBody";
+    rb.boneIndex = 0;
+    rb.shape = 1; // Box
+    rb.size = {1.0f, 1.0f, 1.0f};
+    rb.position = {0.0f, 12.0f, 0.0f}; // LH (0, 12, 0) -> RH (0, 12, 0), offset is +2 in Y
+    rb.rotation = {0.0f, 0.0f, 0.0f};
+    rb.physicsMode = 0; // FollowBone / Kinematic
+
+    doc.bones = {bone};
+    doc.rigidBodies = {rb};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Initial position at rest pose
+    glm::vec3 initPos = scene.physicsEngine()->rigidBodyPosition(0);
+    QVERIFY(std::abs(initPos.y - 12.0f) < 1e-4f);
+
+    // Translate and rotate parent bone
+    glm::vec3 userTrans(3.0f, 4.0f, 5.0f);
+    glm::quat userRot = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f)); // 90 deg around Y
+    scene.setBoneTransform(0, userTrans, userRot);
+    scene.evaluate(1.0f / 60.0f);
+
+    // Compute expected world matrix for the rigid body:
+    // W_body = W_bone * offset
+    const auto* meta = scene.physicsEngine()->runtimeRigidBody(0);
+    QVERIFY(meta != nullptr);
+    glm::mat4 expectedWorld = scene.worldMatrix(0) * meta->boneToBodyOffset;
+    glm::mat4 actualWorld = scene.physicsEngine()->rigidBodyTransform(0);
+
+    for (int c = 0; c < 4; ++c) {
+        for (int r = 0; r < 4; ++r) {
+            QVERIFY2(std::abs(actualWorld[c][r] - expectedWorld[c][r]) < 1e-4f,
+                     qPrintable(QString("Matrix mismatch at [%1][%2]: actual=%3, expected=%4")
+                                    .arg(c).arg(r).arg(actualWorld[c][r]).arg(expectedWorld[c][r])));
+        }
+    }
+}
+
+void TstPmxEvaluator::testBulletSpringConstraintStability() {
+    PmxDocument doc;
+
+    // Body A: Anchored kinematic body at (0, 10, 0)
+    PmxRigidBody rbA;
+    rbA.nameJp = "Anchor";
+    rbA.boneIndex = -1;
+    rbA.shape = 1; // Box
+    rbA.size = {1.0f, 1.0f, 1.0f};
+    rbA.position = {0.0f, 10.0f, 0.0f};
+    rbA.physicsMode = 0; // Kinematic
+
+    // Body B: Dynamic body at (0, 8, 0)
+    PmxRigidBody rbB;
+    rbB.nameJp = "Bob";
+    rbB.boneIndex = -1;
+    rbB.shape = 0; // Sphere
+    rbB.size = {1.0f, 1.0f, 1.0f};
+    rbB.position = {0.0f, 8.0f, 0.0f};
+    rbB.mass = 2.0f;
+    rbB.linearDamping = 0.1f;
+    rbB.angularDamping = 0.1f;
+    rbB.physicsMode = 1; // Dynamic
+
+    // Joint linking A (0) and B (1) at (0, 9, 0)
+    PmxJoint joint;
+    joint.nameJp = "SpringJoint";
+    joint.rigidBodyIndexA = 0;
+    joint.rigidBodyIndexB = 1;
+    joint.position = {0.0f, 9.0f, 0.0f};
+    joint.linearLowerLimit = {-1.0f, -5.0f, -1.0f};
+    joint.linearUpperLimit = {1.0f, 5.0f, 1.0f};
+    joint.angularLowerLimit = {-0.5f, -0.5f, -0.5f};
+    joint.angularUpperLimit = {0.5f, 0.5f, 0.5f};
+    joint.springLinearStiffness = {50.0f, 200.0f, 50.0f};
+    joint.springAngularStiffness = {10.0f, 10.0f, 10.0f};
+
+    doc.rigidBodies = {rbA, rbB};
+    doc.joints = {joint};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    QCOMPARE(scene.physicsEngine()->constraintCount(), 1);
+
+    // Simulate 60 steps
+    for (int step = 0; step < 60; ++step) {
+        scene.evaluate(1.0f / 60.0f);
+
+        glm::vec3 pos = scene.physicsEngine()->rigidBodyPosition(1);
+        glm::vec3 vel = scene.physicsEngine()->rigidBodyLinearVelocity(1);
+
+        QVERIFY(!std::isnan(pos.x) && !std::isnan(pos.y) && !std::isnan(pos.z));
+        QVERIFY(!std::isinf(pos.x) && !std::isinf(pos.y) && !std::isinf(pos.z));
+        QVERIFY(!std::isnan(vel.x) && !std::isnan(vel.y) && !std::isnan(vel.z));
+        QVERIFY(!std::isinf(vel.x) && !std::isinf(vel.y) && !std::isinf(vel.z));
+
+        // Stable bounds: Dynamic body must remain within reasonable bounds around anchor
+        QVERIFY2(pos.y > 0.0f && pos.y < 15.0f,
+                 qPrintable(QString("Body Y pos out of bounds (exploded): %1").arg(pos.y)));
+    }
+}
+
+void TstPmxEvaluator::testBulletCollisionFiltering() {
+    PmxDocument doc;
+
+    // Body 0: Kinematic platform at (0, 0, 0), group 0
+    PmxRigidBody platform;
+    platform.nameJp = "Platform";
+    platform.boneIndex = -1;
+    platform.shape = 1; // Box
+    platform.size = {10.0f, 1.0f, 10.0f};
+    platform.position = {0.0f, 0.0f, 0.0f};
+    platform.groupIndex = 0;
+    // Mask to ignore collisions with group 1 (bit 1 set)
+    platform.nonCollisionMask = static_cast<uint16_t>(1 << 1);
+    platform.physicsMode = 0; // Kinematic
+
+    // Body 1: Dynamic falling ball at (0, 3, 0), group 1
+    PmxRigidBody ball;
+    ball.nameJp = "FallingBall";
+    ball.boneIndex = -1;
+    ball.shape = 0; // Sphere
+    ball.size = {1.0f, 1.0f, 1.0f};
+    ball.position = {0.0f, 3.0f, 0.0f};
+    ball.groupIndex = 1;
+    // Mask to ignore collisions with group 0 (bit 0 set)
+    ball.nonCollisionMask = static_cast<uint16_t>(1 << 0);
+    ball.mass = 1.0f;
+    ball.physicsMode = 1; // Dynamic
+
+    doc.rigidBodies = {platform, ball};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Step simulation 60 frames. With gravity -98, ball falls fast.
+    // If collision filtering works, ball penetrates through platform (y=0) and reaches negative Y.
+    for (int step = 0; step < 60; ++step) {
+        scene.evaluate(1.0f / 60.0f);
+    }
+
+    glm::vec3 ballPos = scene.physicsEngine()->rigidBodyPosition(1);
+    QVERIFY2(ballPos.y < -1.0f,
+             qPrintable(QString("Ball did not pass through platform (collided instead): ballPos.y = %1").arg(ballPos.y)));
+}
+
+void TstPmxEvaluator::testPhysicsSceneReset() {
+    PmxDocument doc;
+
+    PmxBone bone;
+    bone.nameJp = "DynamicBone";
+    bone.parentBoneIndex = -1;
+    bone.position = {0.0f, 25.0f, 0.0f}; // LH (0, 25, 0) -> RH (0, 25, 0)
+
+    PmxRigidBody rb;
+    rb.nameJp = "DynamicBody";
+    rb.boneIndex = 0;
+    rb.shape = 0; // Sphere
+    rb.size = {1.0f, 1.0f, 1.0f};
+    rb.position = {0.0f, 25.0f, 0.0f};
+    rb.mass = 1.0f;
+    rb.physicsMode = 1; // Dynamic
+
+    doc.bones = {bone};
+    doc.rigidBodies = {rb};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    glm::vec3 restPos = scene.worldPosition(0);
+    QVERIFY(std::abs(restPos.y - 25.0f) < 1e-4f);
+
+    // Step simulation so the body falls
+    for (int step = 0; step < 30; ++step) {
+        scene.evaluate(1.0f / 60.0f);
+    }
+
+    glm::vec3 fallenPos = scene.physicsEngine()->rigidBodyPosition(0);
+    glm::vec3 fallenVel = scene.physicsEngine()->rigidBodyLinearVelocity(0);
+    QVERIFY(fallenPos.y < 20.0f);
+    QVERIFY(fallenVel.y < -1.0f);
+
+    // Bone also followed dynamic body
+    glm::vec3 boneFallenPos = scene.worldPosition(0);
+    QVERIFY(boneFallenPos.y < 20.0f);
+
+    // Reset physics
+    scene.resetPhysics();
+
+    glm::vec3 resetPos = scene.physicsEngine()->rigidBodyPosition(0);
+    glm::vec3 resetVel = scene.physicsEngine()->rigidBodyLinearVelocity(0);
+    glm::vec3 resetAngVel = scene.physicsEngine()->rigidBodyAngularVelocity(0);
+    glm::vec3 resetBonePos = scene.worldPosition(0);
+
+    // Dynamic body restored to original rest coordinates
+    QVERIFY2(glm::distance(resetPos, glm::vec3(0.0f, 25.0f, 0.0f)) < 1e-4f,
+             qPrintable(QString("Reset position (%1, %2, %3) != rest position").arg(resetPos.x).arg(resetPos.y).arg(resetPos.z)));
+    // Velocities zeroed
+    QVERIFY(glm::distance(resetVel, glm::vec3(0.0f)) < 1e-6f);
+    QVERIFY(glm::distance(resetAngVel, glm::vec3(0.0f)) < 1e-6f);
+    // Dynamic bone restored to rest position
+    QVERIFY2(glm::distance(resetBonePos, glm::vec3(0.0f, 25.0f, 0.0f)) < 1e-4f,
+             qPrintable(QString("Reset bone position (%1, %2, %3) != rest position").arg(resetBonePos.x).arg(resetBonePos.y).arg(resetBonePos.z)));
+}
+
+void TstPmxEvaluator::testBulletPhysicsAndBoneMode() {
+    PmxDocument doc;
+
+    // Parent bone at (0, 0, 0)
+    PmxBone parent;
+    parent.nameJp = "Parent";
+    parent.parentBoneIndex = -1;
+    parent.position = {0.0f, 0.0f, 0.0f};
+
+    // Child bone at (0, 10, 0)
+    PmxBone child;
+    child.nameJp = "Child";
+    child.parentBoneIndex = 0;
+    child.position = {0.0f, 10.0f, 0.0f};
+
+    // Dynamic body linked to child bone (index 1), with physicsMode = 2 (PhysicsAndBone)
+    PmxRigidBody rb;
+    rb.nameJp = "PhysicsAndBoneBody";
+    rb.boneIndex = 1;
+    rb.shape = 0; // Sphere
+    rb.size = {1.0f, 1.0f, 1.0f};
+    rb.position = {0.0f, 10.0f, 0.0f};
+    rb.mass = 1.0f;
+    rb.physicsMode = 2; // PhysicsAndBone
+
+    doc.bones = {parent, child};
+    doc.rigidBodies = {rb};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    // Initial check: child bone position is (0, 10, 0)
+    QVERIFY(glm::distance(scene.worldPosition(1), glm::vec3(0.0f, 10.0f, 0.0f)) < 1e-4f);
+
+    // Animate parent bone: translate by (5, 3, 2)
+    glm::vec3 parentTrans(5.0f, 3.0f, 2.0f);
+    scene.setBoneTransform(0, parentTrans, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+
+    // Apply angular velocity to the rigid body so it rotates under simulation
+    auto* btBody = scene.physicsEngine()->rigidBody(0);
+    QVERIFY(btBody != nullptr);
+    btBody->setAngularVelocity(btVector3(2.0f, 3.0f, 4.0f));
+
+    // Simulate for 10 steps
+    for (int step = 0; step < 10; ++step) {
+        scene.evaluate(1.0f / 60.0f);
+    }
+
+    // 1. Verify rigid body has actually rotated
+    glm::vec3 angVel = scene.physicsEngine()->rigidBodyAngularVelocity(0);
+    QVERIFY(glm::length(angVel) > 0.1f);
+    glm::mat4 bodyTransform = scene.physicsEngine()->rigidBodyTransform(0);
+
+    // 2. Child bone position MUST remain locked to parent translation:
+    // Expected position = restPosition(0, 10, 0) + parentTrans(5, 3, 2) = (5, 13, 2)
+    glm::vec3 expectedChildPos = glm::vec3(0.0f, 10.0f, 0.0f) + parentTrans;
+    glm::vec3 actualChildPos = scene.worldPosition(1);
+    QVERIFY2(glm::distance(actualChildPos, expectedChildPos) < 1e-4f,
+             qPrintable(QString("PhysicsAndBone translation drift: got (%1, %2, %3), expected (%4, %5, %6)")
+                            .arg(actualChildPos.x).arg(actualChildPos.y).arg(actualChildPos.z)
+                            .arg(expectedChildPos.x).arg(expectedChildPos.y).arg(expectedChildPos.z)));
+
+    // 3. Child bone rotation MUST match the simulated rigid body's rotation:
+    // W_bone_expected_rot = bodyWorld_rot * bodyToBoneOffset_rot
+    const auto* meta = scene.physicsEngine()->runtimeRigidBody(0);
+    QVERIFY(meta != nullptr);
+    glm::mat4 expectedFull = bodyTransform * meta->bodyToBoneOffset;
+    const glm::mat4& actualBoneWorld = scene.worldMatrix(1);
+
+    // Check upper 3x3 rotation basis matches physics orientation
+    for (int c = 0; c < 3; ++c) {
+        for (int r = 0; r < 3; ++r) {
+            QVERIFY2(std::abs(actualBoneWorld[c][r] - expectedFull[c][r]) < 1e-3f,
+                     qPrintable(QString("PhysicsAndBone rotation mismatch at [%1][%2]: actual=%3, expected=%4")
+                                    .arg(c).arg(r).arg(actualBoneWorld[c][r]).arg(expectedFull[c][r])));
+        }
+    }
+}
+
+void TstPmxEvaluator::testBulletCompoundEulerRotation() {
+    // Non-zero 3-axis Euler rotation in LH radians
+    glm::vec3 rotLH(0.35f, -0.45f, 0.65f);
+    glm::vec3 posLH(1.5f, 2.5f, 3.5f);
+
+    // Expected RH values
+    glm::vec3 posRH(posLH.x, posLH.y, -posLH.z);
+    glm::vec3 rotRH(-rotLH.x, -rotLH.y, rotLH.z);
+
+    // Canonical extrinsic ZXY / intrinsic YXZ rotation: R = Ry * Rx * Rz
+    glm::quat qx = glm::angleAxis(rotRH.x, glm::vec3(1.0f, 0.0f, 0.0f));
+    glm::quat qy = glm::angleAxis(rotRH.y, glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::quat qz = glm::angleAxis(rotRH.z, glm::vec3(0.0f, 0.0f, 1.0f));
+    glm::quat qExpected = glm::normalize(qy * qx * qz);
+    glm::mat3 rotExpected = glm::mat3_cast(qExpected);
+
+    // Create btTransform via PmxPhysicsEngine::createBtTransform
+    btTransform t = PmxPhysicsEngine::createBtTransform(posLH, rotLH);
+
+    // Check origin
+    const btVector3& origin = t.getOrigin();
+    QVERIFY(std::abs(static_cast<float>(origin.x()) - posRH.x) < 1e-4f);
+    QVERIFY(std::abs(static_cast<float>(origin.y()) - posRH.y) < 1e-4f);
+    QVERIFY(std::abs(static_cast<float>(origin.z()) - posRH.z) < 1e-4f);
+
+    // Check 3x3 rotation basis matches canonical ZXY matrix within 10^-4 tolerance
+    const btMatrix3x3& basis = t.getBasis();
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            float actualVal = static_cast<float>(basis[r][c]);
+            float expectedVal = rotExpected[c][r]; // GLM is [col][row]
+            QVERIFY2(std::abs(actualVal - expectedVal) < 1e-4f,
+                     qPrintable(QString("Compound Euler basis mismatch at row %1 col %2: actual=%3, expected=%4")
+                                    .arg(r).arg(c).arg(actualVal).arg(expectedVal)));
+        }
+    }
+
+    // Also verify via full document and runtime scene loading
+    PmxDocument doc;
+    PmxRigidBody rb;
+    rb.nameJp = "EulerBody";
+    rb.boneIndex = -1;
+    rb.shape = 1; // Box
+    rb.size = {2.0f, 2.0f, 2.0f};
+    rb.position = posLH;
+    rb.rotation = rotLH;
+    rb.physicsMode = 0; // Kinematic
+    doc.rigidBodies = {rb};
+
+    PmxRuntimeScene scene;
+    scene.loadDocument(doc);
+
+    glm::mat4 sceneWorld = scene.physicsEngine()->rigidBodyTransform(0);
+    for (int c = 0; c < 3; ++c) {
+        for (int r = 0; r < 3; ++r) {
+            float actualVal = sceneWorld[c][r];
+            float expectedVal = rotExpected[c][r];
+            QVERIFY2(std::abs(actualVal - expectedVal) < 1e-4f,
+                     qPrintable(QString("Scene body transform basis mismatch at [%1][%2]: actual=%3, expected=%4")
+                                    .arg(c).arg(r).arg(actualVal).arg(expectedVal)));
+        }
+    }
 }
 
 QTEST_MAIN(TstPmxEvaluator)

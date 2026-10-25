@@ -70,6 +70,14 @@ else()
     endif()
 endif()
 
+find_package(Bullet QUIET)
+if(NOT BULLET_FOUND)
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(BULLET bullet)
+    endif()
+endif()
+
 add_library(PmxCore STATIC
     src/core/PmxTypes.h
     src/core/PmxDocument.h
@@ -103,18 +111,22 @@ add_library(PmxEvaluator STATIC
     src/evaluator/PmxRuntimeScene.cpp
     src/evaluator/PmxVertexDeformer.h
     src/evaluator/PmxVertexDeformer.cpp
+    src/evaluator/PmxPhysicsEngine.h
+    src/evaluator/PmxPhysicsEngine.cpp
 )
 
 target_include_directories(PmxEvaluator PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/evaluator"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core"
+    ${BULLET_INCLUDE_DIRS}
 )
 
 target_link_libraries(PmxEvaluator PUBLIC
     PmxCore
     Qt6::Core
     glm::glm
+    ${BULLET_LIBRARIES}
 )
 
 add_library(PmxModels STATIC
@@ -395,6 +407,7 @@ target_link_libraries(tst_pmx_evaluator PRIVATE
     PmxEvaluator
     PmxCore
     Qt6::Test
+    ${BULLET_LIBRARIES}
 )
 
 add_test(NAME tst_pmx_evaluator COMMAND tst_pmx_evaluator)

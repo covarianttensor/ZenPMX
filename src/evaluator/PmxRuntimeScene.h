@@ -16,6 +16,8 @@
 
 namespace pmx {
 
+class PmxPhysicsEngine;
+
 struct RuntimeBone {
     int32_t index = -1;
     int32_t parentIndex = -1;
@@ -56,17 +58,29 @@ struct EvaluatedMaterial {
 
 class PmxRuntimeScene {
 public:
-    PmxRuntimeScene() = default;
-    ~PmxRuntimeScene() = default;
+    PmxRuntimeScene();
+    ~PmxRuntimeScene();
+    PmxRuntimeScene(const PmxRuntimeScene&) = delete;
+    PmxRuntimeScene& operator=(const PmxRuntimeScene&) = delete;
+    PmxRuntimeScene(PmxRuntimeScene&&) noexcept;
+    PmxRuntimeScene& operator=(PmxRuntimeScene&&) noexcept;
 
     // Lifecycle & Execution
     void loadDocument(const PmxDocument& doc);
-    void evaluate();
+    void evaluate(float deltaTime = 1.0f / 60.0f);
     void evaluateMorphs();
     void evaluateBones();
     void evaluatePrePhysicsBones();
     void evaluatePostPhysicsBones();
     void deformVertices();
+
+    // Physics Engine Controls & Accessors
+    PmxPhysicsEngine* physicsEngine() { return m_physicsEngine.get(); }
+    const PmxPhysicsEngine* physicsEngine() const { return m_physicsEngine.get(); }
+    void setPhysicsEnabled(bool enabled) { m_physicsEnabled = enabled; }
+    bool isPhysicsEnabled() const { return m_physicsEnabled; }
+    void resetPhysics();
+    void setBoneWorldMatrix(int boneIndex, const glm::mat4& worldMatrix);
 
     // Transform & Morph manipulation
     void setBoneTransform(int boneIndex, const glm::vec3& translation, const glm::quat& rotation);
@@ -164,6 +178,9 @@ private:
 
     std::vector<IkChain> m_ikChains;
     std::vector<std::vector<int32_t>> m_children;
+
+    std::unique_ptr<PmxPhysicsEngine> m_physicsEngine;
+    bool m_physicsEnabled = true;
 };
 
 } // namespace pmx

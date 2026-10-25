@@ -1,10 +1,16 @@
 #include "PmxRuntimeScene.h"
+#include "PmxPhysicsEngine.h"
 
 #include <algorithm>
 #include <cmath>
 #include <numeric>
 
 namespace pmx {
+
+PmxRuntimeScene::PmxRuntimeScene() = default;
+PmxRuntimeScene::~PmxRuntimeScene() = default;
+PmxRuntimeScene::PmxRuntimeScene(PmxRuntimeScene&&) noexcept = default;
+PmxRuntimeScene& PmxRuntimeScene::operator=(PmxRuntimeScene&&) noexcept = default;
 
 namespace {
 
@@ -141,13 +147,29 @@ void PmxRuntimeScene::loadDocument(const PmxDocument& doc) {
         em.toonTint = glm::vec4(1.0f);
     }
 
-    evaluate();
-}
-
-void PmxRuntimeScene::evaluate() {
+    // Evaluate pre-physics rest pose
     evaluateMorphs();
     evaluatePrePhysicsBones();
     solveIk();
+
+    // Initialize physics engine
+    m_physicsEngine = std::make_unique<PmxPhysicsEngine>();
+    m_physicsEngine->init(doc, *this);
+
+    evaluate(0.0f);
+}
+
+void PmxRuntimeScene::evaluate(float deltaTime) {
+    evaluateMorphs();
+    evaluatePrePhysicsBones();
+    solveIk();
+    if (m_physicsEnabled && m_physicsEngine) {
+        m_physicsEngine->syncKinematicBodies(*this);
+        if (deltaTime > 0.0f) {
+            m_physicsEngine->stepSimulation(deltaTime);
+        }
+        m_physicsEngine->syncDynamicBones(*this);
+    }
     evaluatePostPhysicsBones();
     deformVertices();
 }
@@ -435,7 +457,23 @@ void PmxRuntimeScene::resetTransforms() {
         bone.ikRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     }
     std::fill(m_morphWeights.begin(), m_morphWeights.end(), 0.0f);
-    evaluate();
+    resetPhysics();
+    evaluate(0.0f);
+}
+
+void PmxRuntimeScene::resetPhysics() {
+    if (m_physicsEngine) {
+        m_physicsEngine->reset();
+        m_physicsEngine->syncDynamicBones(*this);
+    }
+}
+
+void PmxRuntimeScene::setBoneWorldMatrix(int boneIndex, const glm::mat4& worldMatrix) {
+    if (boneIndex >= 0 && boneIndex < static_cast<int>(m_bones.size())) {
+        m_bones[static_cast<size_t>(boneIndex)].worldMatrix = worldMatrix;
+        m_bones[static_cast<size_t>(boneIndex)].skinningMatrix =
+            worldMatrix * m_inverseBindMatrices[static_cast<size_t>(boneIndex)];
+    }
 }
 
 void PmxRuntimeScene::setMorphWeight(int morphIndex, float weight) {
