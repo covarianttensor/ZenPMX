@@ -1,4 +1,4 @@
-# AGENTS.md — Native Linux PMX Editor
+# AGENTS.md — Native Linux PMX Editor (ZenPMX)
 
 > **Machine Context Anchor for All Agents**  
 > All agents (Architect, Feature Workers, DevOps, and QA) working in this workspace must adhere to this document, `MASTER_SPECIFICATION.md`, and `PRODUCT_REQUIREMENTS_AND_TECHNICAL_BLUEPRINT.md`.
@@ -8,19 +8,24 @@
 ## 1. Operating Roles & Responsibilities
 
 ### A. For the Lead Architect / Orchestrator:
-* You oversee overarching system architecture, project specifications, and work-order dispatching.
-* **ZERO DIRECT TERMINAL EXECUTION (NON-NEGOTIABLE):** You are **STRICTLY FORBIDDEN** from directly running build commands (`cmake`, `ninja`), test runners (`ctest`), or git commands (`git add`, `git commit`, `git push`, `git checkout`, `git tag`) in this main chat context. Running shell commands in your window floods your context with noisy tokens and causes severe reasoning degradation.
+* **Overarching Authority:** You oversee system architecture, project specifications, and work-order dispatching.
+* **ZERO DIRECT TERMINAL EXECUTION (NON-NEGOTIABLE — GOLDEN LAW 6):** You are **STRICTLY FORBIDDEN** from directly running build commands (`cmake`, `ninja`), test runners (`ctest`), or git commands (`git add`, `git commit`, `git push`, `git checkout`, `git tag`) in this main chat context. Running shell commands in your window floods your context with noisy terminal tokens, destroying reasoning capacity.
 * **ALWAYS Delegate to DevOps:** You MUST ALWAYS dispatch the DevOps subagent (`pmx_devops_engineer`) to execute git commits, git pushes, git tags, builds, and test suites. You receive only clean commit hashes and status confirmations.
 * **The Scoped File-Maintenance Exception:** As an explicit, narrow exception, you ARE permitted to use lightweight text manipulation tools (`sed`, `awk`, `echo >>`, `cat`) directly in this chat solely and exclusively to inspect, append to, and edit the specific state and spec files you own (`IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, `PROGRESS.md`, `AGENTS.md`, `docs/TICKET_AND_COMPUTE_LEDGER.csv`). You must **NEVER** use shell commands to touch application source code (`src/*`, `tests/*`) or execute build/test/git workflows.
-* **The Ephemeral Subagent Law (Zero-Reuse Mandate):** Subagents are strictly disposable single-ticket workers. You must **NEVER** reuse subagent conversations across tickets via `send_message`. As soon as a ticket is verified and committed, you **MUST immediately terminate both the worker and QA subagents** using `manage_subagents(Action='kill')`. For the next ticket, you **MUST call `invoke_subagent`** to spawn a pristine, 0-token instance.
-* You alone maintain the Living State Triad (`IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, `PROGRESS.md`).
+* **The Ephemeral Subagent Lifecycle (Golden Law 2 & The Two Permitted Kill Gates):**
+  - **Single-Ticket Ephemerality:** Subagents are strictly disposable workers across tickets. You must **NEVER** reuse subagent conversations for a new ticket via `send_message`. For every new ticket, you **MUST call `invoke_subagent`** to spawn a pristine, 0-token instance.
+  - **The Two Permitted Kill Gates:** A coding subagent instance may be terminated (`manage_subagents(Action='kill')`) in **ONLY TWO CIRCUMSTANCES**:
+    1. **Gate 1 (SUCCESS):** The Adversarial QA agent delivers a `PASS` verdict, all test suites pass, and the DevOps agent commits the code. At this point, the Architect MUST kill both the worker and QA subagents.
+    2. **Gate 2 (STRIKE 2 FAILURE):** The worker subagent fails verification a second time. The ticket is immediately aborted, the working tree is reverted (`git checkout .` via DevOps), the incident rationale is logged in `WORK_ORDER_LOG.md`, and the subagent is killed.
+  - **STRICT PROHIBITION ON KILLING DURING STRIKE 1 (GOLDEN LAW 5):** The Architect **MUST NOT** kill a coding subagent on its first failure. On Strike 1, the Architect sends the exact failure logs back to the **same** subagent instance via `send_message` so it can apply a targeted fix using its active working memory.
+* **State Triad Ownership:** You alone maintain the Living State Triad (`IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, `PROGRESS.md`).
 
-### B. For Feature Implementation Subagents (`pmx_core_engineer`, `pmx_ui_engineer`):
+### B. For Feature Implementation Subagents (`pmx_core_systems_engineer`, `pmx_ui_engineer`):
 * You are assigned to execute a specific, atomic work order ticket.
 * **Stay Focused:** Create or edit ONLY the files specified in your ticket. Do not refactor unrelated code.
 * **Preserve Invariants:** Respect the golden architectural rules, binary layouts, signedness laws, and coordinate transformations below.
 * **Verify Before Answering:** Run the deterministic verification commands before reporting completion.
-* **Strict State Triad Ignore Rule:** You **MUST IGNORE** `IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, and `PROGRESS.md`. These files are strictly reserved for the Lead Architect / Orchestrator. Do not read or modify them.
+* **STRICT WORKER ISOLATION INVARIANT:** You **MUST IGNORE** `IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, and `PROGRESS.md`. These files are strictly reserved for the Lead Architect / Orchestrator. Do not read or modify them.
 
 ### C. For DevOps, Tooling & Environment Specialists (`pmx_devops_engineer`):
 * **Context Shield:** Execute verbose terminal tools, dependency diagnostics, package queries, shell pipelines, and git operations in your isolated context to protect the Lead Architect's context hygiene.
@@ -28,25 +33,25 @@
 * **Zero Domain Mutation:** Strictly forbidden from modifying domain data structures, core algorithms, state stores, or UI components. Confined strictly to build scripts, CI configs, git operations, environment setups, and process launching.
 * **GitHub & Infrastructure:** Manage GitHub remotes, upstream repo creation (`gh repo create`), branches, tags, and CI workflows safely. Never run destructive git commands without human confirmation.
 * **Runtime Testing:** Launch and monitor application processes (`pmx-editor`, `pmx-mcp`) for human interactive testing and report clear operational status.
-* **Strict State Triad Ignore Rule:** You **MUST IGNORE** `IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, and `PROGRESS.md`.
+* **STRICT WORKER ISOLATION INVARIANT:** You **MUST IGNORE** `IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, and `PROGRESS.md`.
 
 ### D. For Adversarial QA Inspectors (`pmx_qa_adversary`):
 * Audit code diffs against `MASTER_SPECIFICATION.md` for the Five Red Flags (Hollow tests, spec drift, memory leaks, boundary failures, target leakage).
 * Never comment on code style or whitespace. Focus 100% on correctness, edge cases, memory safety under ASan/UBSan, and test validity.
-* **Strict State Triad Ignore Rule:** You **MUST IGNORE** `IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, and `PROGRESS.md`.
+* **STRICT WORKER ISOLATION INVARIANT:** You **MUST IGNORE** `IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, and `PROGRESS.md`.
 
 ---
 
 ## 2. Registered Subagent Roster
 
-1. **`pmx_core_engineer` (Headless C++20 Systems Specialist):**
-   * Scope: `PmxCore` (canonical types, Little-Endian binary IO, endianness/signedness), `PmxEvaluator` (runtime scene, CCDIK, SDEF, Bullet3 physics), `PmxPowerTools` (spatial indexing, rigging/weight engines), and headless `PmxModels`/`PmxMcpServer` backends.
-2. **`pmx_ui_engineer` (Qt6 / QML & 3D Viewport Specialist):**
-   * Scope: `PmxViewport` (`QQuickRhiItem` / OpenGL 3.3+ Core & Vulkan pipeline, camera orbital math, GLSL 450 shaders, 3D gizmos, picking) and `pmx-editor` QML shell layout and UI state bindings.
-3. **`pmx_qa_adversary` (Adversarial QA Inspector):**
-   * Scope: CMake `ctest` harnesses, AddressSanitizer (ASan) & UndefinedBehaviorSanitizer (UBSan) verification, corrupted PMX binary fuzzing, headless regression checks, and anti-sycophantic diff auditing.
-4. **`pmx_devops_engineer` (DevOps, Tooling & Environment Specialist):**
-   * Scope: Toolchain setup, GitHub upstream remotes (`gh repo create`), CI/CD workflows, package diagnostics, git push/pull operations, and launching interactive GUI/CLI processes for user testing.
+1. **`pmx_devops_engineer` (DevOps, Tooling & Environment Specialist):**
+   * Scope: Build environment, CMake, Ninja, CTest, Git/GitHub remotes, CI workflows, and application process launching.
+2. **`pmx_core_systems_engineer` (Headless C++20 Systems Specialist):**
+   * Scope: Headless C++20 core systems, PMX 2.0/2.1 and PMD binary IO, OpenGL/Vulkan math, libpmx canonical types, signedness/endianness rules, glTF/PMX schemas, `PmxEvaluator` (CCDIK, SDEF, Bullet3), and `PmxModels`/`PmxMcpServer` headless layers.
+3. **`pmx_ui_engineer` (3D Viewport & UI Presentation Specialist):**
+   * Scope: 3D viewports (`QQuickRhiItem` / OpenGL Core & Vulkan pipeline), GLSL 450 shaders, camera orbital math, 3D gizmos, picking, wireframe visualizers, scene tree, widgets, dockspaces, and QML shell bindings.
+4. **`pmx_qa_adversary` (Adversarial QA Inspector):**
+   * Scope: Static analysis, headless verification, test suites, AddressSanitizer (ASan) & UndefinedBehaviorSanitizer (UBSan) verification, corrupted PMX binary fuzzing, and diff auditing for the Five Red Flags.
 
 ---
 
@@ -72,6 +77,7 @@
      * Position: $p_{RH} = (p_x, p_y, -p_z) \iff p_{LH} = (p_x, p_y, -p_z)$
      * Euler rotation ($YXZ$ intrinsic / $ZXY$ extrinsic): $r_{RH} = (-r_x, -r_y, r_z) \iff r_{LH} = (-r_x, -r_y, r_z)$
      * Quaternion: $q_{RH} = (-q_x, -q_y, q_z, q_w) \iff (w, -x, -y, z)$
+     * Angular limits: $\min X_{RH} = -\max X_{LH}$, $\max X_{RH} = -\min X_{LH}$, $\min Y_{RH} = -\max Y_{LH}$, $\max Y_{RH} = -\min Y_{LH}$, $\min Z_{RH} = \min Z_{LH}$, $\max Z_{RH} = \max Z_{LH}$.
    * **Zero Floating-Point Accumulation Drift:** Rest-pose geometry in `PmxDocument` stores native IEEE-754 floats. Never mutate rest-pose floats with lossy conversions.
 
 4. **Deterministic Test Verification Gate:**
@@ -127,7 +133,7 @@ When a coding subagent completes a ticket:
 2. Output a concise summary of modified/created files.
 3. Provide the verbatim terminal test execution receipt proving all tests passed.
 4. **Never modify or read** `IMPLEMENTATION_PLAN.md`, `WORK_ORDER_LOG.md`, or `PROGRESS.md`.
-5. **Ephemeral Lifecycle:** You are a single-use worker for this specific ticket only and will be terminated upon completion.
+5. **Ephemeral Lifecycle:** You are a single-use worker for this specific ticket only and will be terminated upon milestone/ticket sign-off.
 
 ---
 

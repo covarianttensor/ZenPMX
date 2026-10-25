@@ -1,7 +1,7 @@
 # WORK_ORDER_LOG.md — Master Work Order & Ticket Revision Ledger
 
 > **Notice:** This document is maintained strictly by the Lead Architect / Orchestrator.  
-> Worker subagents (`pmx_core_engineer`, `pmx_ui_engineer`, `pmx_qa_adversary`, `pmx_devops_engineer`) MUST NOT read or modify this file.
+> Worker subagents (`pmx_core_systems_engineer`, `pmx_ui_engineer`, `pmx_qa_adversary`, `pmx_devops_engineer`) MUST NOT read or modify this file.
 
 ---
 
