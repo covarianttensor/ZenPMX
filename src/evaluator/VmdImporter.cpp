@@ -25,9 +25,8 @@ QString decodeShiftJis(const char* data, size_t maxLen) {
     while (len < maxLen && data[len] != '\0') {
         ++len;
     }
-    auto encoding = QStringDecoder::encodingForName("Shift-JIS");
-    if (encoding.has_value()) {
-        QStringDecoder decoder(encoding.value());
+    QStringDecoder decoder("Shift-JIS");
+    if (decoder.isValid()) {
         QString res = decoder(QByteArrayView(data, static_cast<qsizetype>(len)));
         if (!decoder.hasError()) {
             return res;
@@ -38,9 +37,8 @@ QString decodeShiftJis(const char* data, size_t maxLen) {
 
 QByteArray encodeShiftJis(const QString& str, size_t fixedLength = 0) {
     QByteArray bytes;
-    auto encoding = QStringConverter::encodingForName("Shift-JIS");
-    if (encoding.has_value()) {
-        QStringEncoder encoder(encoding.value());
+    QStringEncoder encoder("Shift-JIS");
+    if (encoder.isValid()) {
         bytes = encoder(str);
     } else {
         bytes = str.toUtf8();

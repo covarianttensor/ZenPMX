@@ -20,9 +20,8 @@ void setError(QString* errorMessage, const QString& msg) {
 }
 
 QByteArray encodeShiftJis(const QString& str) {
-    auto encoding = QStringConverter::encodingForName("Shift-JIS");
-    if (encoding.has_value()) {
-        QStringEncoder encoder(encoding.value());
+    QStringEncoder encoder("Shift-JIS");
+    if (encoder.isValid()) {
         return encoder(str);
     }
     return str.toUtf8();
@@ -32,9 +31,8 @@ QString decodeText(const QByteArray& data) {
     if (data.startsWith("\xEF\xBB\xBF")) {
         return QString::fromUtf8(data.constData() + 3, data.size() - 3);
     }
-    auto encoding = QStringDecoder::encodingForName("Shift-JIS");
-    if (encoding.has_value()) {
-        QStringDecoder decoder(encoding.value());
+    QStringDecoder decoder("Shift-JIS");
+    if (decoder.isValid()) {
         QString res = decoder(data);
         if (!decoder.hasError()) {
             return res;

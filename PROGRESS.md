@@ -268,6 +268,30 @@
   - Worker resolved all items: used `Layout.preferredWidth` in `TimelineBar.qml`, added `transformViewChanged` trigger in `synchronize()` line 349, and added `testTransformViewMaterialMorphSyncAndRestoration` in `tests/tst_pmx_viewport.cpp`.
   - Adversarial QA Re-Audit PASSED; committed at `7c0ce9a`.
 
+### Incident 17: Teardown UBSan Type Mismatch & QML Null Guards
+* **Date:** 2026-10-25 18:31 UTC
+* **Subsystem:** `PmxViewport` & `pmx-editor` (`src/viewport/PmxViewportItem.h/.cpp`, `src/app/qml/BatchOperationDialog.qml`)
+* **Root Cause:**
+  1. On application close, QML teardown destroyed `PmxAppBridge` while `PmxViewportItem::setController(nullptr)` was invoked, calling `m_controller->undoStack()` on a partially destroyed `QObject` and triggering a UBSan runtime error.
+  2. `BatchOperationDialog.qml` accessed `bridge.displayLanguage` during window destruction when `bridge` was null, generating QML `TypeError` exceptions.
+* **Corrective Action:**
+  - Hardened `PmxViewportItem` by replacing raw pointers with `QPointer<PmxDocumentController>`, `QPointer<QUndoStack>`, and `QPointer<PmxSelectionManager>`.
+  - Used wildcard `disconnect(..., nullptr, this, nullptr)` during disconnects to avoid member calls on dying controllers.
+  - Added null guards `bridge && bridge.displayLanguage ...` across `BatchOperationDialog.qml`.
+  - Application verified with clean exit code 0 during interactive user testing; committed at `8f15089`.
+
+### Incident 18: VMD/VPD Shift-JIS Decoder Fallback & Bone Name Mojibake
+* **Date:** 2026-10-25 19:00 UTC
+* **Subsystem:** `PmxEvaluator` (`src/evaluator/VmdImporter.cpp`, `src/evaluator/VpdImporter.cpp`, `tests/tst_pmx_evaluator.cpp`)
+* **Root Cause:**
+  1. `VmdImporter` and `VpdImporter` used `QStringDecoder::encodingForName("Shift-JIS")`. In Qt 6, `encodingForName()` only returns values for standard Unicode enum variants, returning `std::nullopt` for legacy named encodings like Shift-JIS.
+  2. Because `encoding.has_value()` was always `false`, it fell back to `QString::fromUtf8()`. Shift-JIS Japanese character bytes became mojibake / replacement characters.
+  3. When `PmxAnimationPlayer::applyToScene()` queried `scene.findBoneByName()`, 0 bones matched the corrupted names, causing imported VMD motion data to apply 0 transforms to the model.
+* **Corrective Action:**
+  - Updated `VmdImporter.cpp` and `VpdImporter.cpp` to construct `QStringDecoder("Shift-JIS")` directly by name.
+  - Verified on user's motion `/home/oscarc/Documents/3D Objects/PHODI PHODI by MizukiC/Motion 1.vmd` matching 102/428 standard bones on `Barbara.pmx` with 101 bones immediately deforming at frame 0.
+  - Added `testDiagnoseUserVmdMotion()` in `tests/tst_pmx_evaluator.cpp`; 8/8 CTest suites passed 100%.
+
 ---
 
 ## 5. Milestone 2 Acceptance & Sign-Off Receipt

@@ -1,4 +1,5 @@
 #include "core/PmxDocument.h"
+#include "core/PmxReader.h"
 #include "core/PmxTypes.h"
 #include "evaluator/PmxRuntimeScene.h"
 #include "evaluator/MmdCcdIkSolver.h"
@@ -7,6 +8,9 @@
 #include "evaluator/VpdImporter.h"
 #include "evaluator/PmxAnimationPlayer.h"
 
+#include <QFile>
+#include <QFileInfo>
+#include <QSet>
 #include <QtTest>
 #include <cmath>
 
@@ -75,6 +79,7 @@ private slots:
     void testAnimationPlayerLooping();
     void testAnimationPlayerNanHandling();
     void testVmdMalformedBufferRejection();
+    void testDiagnoseUserVmdMotion();
 };
 
 void TstPmxEvaluator::initTestCase() {
@@ -2322,6 +2327,204 @@ void TstPmxEvaluator::testVmdMalformedBufferRejection() {
     hugeCam.append(reinterpret_cast<const char*>(&zero), sizeof(quint32)); // morph count = 0
     hugeCam.append(reinterpret_cast<const char*>(&hugeCount), sizeof(quint32)); // camera count = 0x7FFFFFFF
     QVERIFY(!VmdImporter::loadFromByteArray(hugeCam, &err).has_value());
+}
+
+void TstPmxEvaluator::testDiagnoseUserVmdMotion() {
+    const QString vmdPath = QStringLiteral("/home/oscarc/Documents/3D Objects/PHODI PHODI by MizukiC/Motion 1.vmd");
+    const QString pmxPath = QStringLiteral("/home/oscarc/Documents/3D Objects/Barbara/Barbara.pmx");
+
+    qDebug().noquote() << "\n========================================================";
+    qDebug().noquote() << "=== DIAGNOSING USER VMD MOTION & PMX INTEGRATION ===";
+    qDebug().noquote() << "========================================================";
+
+    // 1. Check if VMD file exists and can be opened
+    QFileInfo vmdInfo(vmdPath);
+    qDebug().noquote() << "[Step 1] Checking VMD File:" << vmdPath;
+    qDebug().noquote() << "  File exists:" << vmdInfo.exists();
+    qDebug().noquote() << "  File size (bytes):" << vmdInfo.size();
+
+    QVERIFY2(vmdInfo.exists(), "VMD file does not exist on disk!");
+
+    QFile vmdFile(vmdPath);
+    bool openOk = vmdFile.open(QIODevice::ReadOnly);
+    qDebug().noquote() << "  File open(ReadOnly):" << openOk;
+    QVERIFY2(openOk, "Cannot open VMD file!");
+
+    QByteArray rawData = vmdFile.readAll();
+    vmdFile.close();
+    qDebug().noquote() << "  Bytes read from file:" << rawData.size();
+
+    // 2. Read header signature (first 30 bytes), version string, and model name
+    QByteArray headerBytes = rawData.left(30);
+    qDebug().noquote() << "[Step 2] Header Signature & Metadata:";
+    qDebug().noquote() << "  Header raw hex:" << headerBytes.toHex();
+    QString headerStr = QString::fromLatin1(headerBytes.constData(), qMin<int>(30, headerBytes.indexOf('\0') >= 0 ? headerBytes.indexOf('\0') : 30));
+    qDebug().noquote() << "  Header string:" << headerStr;
+
+    QByteArray modelBytes = rawData.mid(30, 20);
+    qDebug().noquote() << "  Model Name raw hex:" << modelBytes.toHex();
+    QString modelStr = QString::fromLatin1(modelBytes.constData(), qMin<int>(20, modelBytes.indexOf('\0') >= 0 ? modelBytes.indexOf('\0') : 20));
+    qDebug().noquote() << "  Model Name (Latin1 preview):" << modelStr;
+
+    // 3. Call VmdImporter::loadFromFile
+    qDebug().noquote() << "[Step 3] Calling pmx::VmdImporter::loadFromFile...";
+    QString vmdError;
+    auto motionOpt = VmdImporter::loadFromFile(vmdPath, &vmdError);
+
+    if (!motionOpt.has_value()) {
+        qDebug().noquote() << "  [ERROR] VmdImporter::loadFromFile returned std::nullopt!";
+        qDebug().noquote() << "  Error string:" << vmdError;
+        QFAIL(qPrintable(QStringLiteral("VmdImporter failed to parse VMD: %1").arg(vmdError)));
+        return;
+    }
+
+    qDebug().noquote() << "  [SUCCESS] VmdImporter::loadFromFile succeeded!";
+    const auto& motion = *motionOpt;
+    qDebug().noquote() << "  Parsed version:" << motion.version;
+    qDebug().noquote() << "  Parsed modelName:" << motion.modelName;
+    qDebug().noquote() << "  Bone keyframes count:" << motion.boneKeyframes.size();
+    qDebug().noquote() << "  Morph keyframes count:" << motion.morphKeyframes.size();
+    qDebug().noquote() << "  IK keyframes count:" << motion.ikKeyframes.size();
+    qDebug().noquote() << "  Max frame:" << motion.maxFrame;
+
+    // Unique bone names present in the motion file
+    QSet<QString> uniqueBonesSet;
+    for (const auto& kf : motion.boneKeyframes) {
+        uniqueBonesSet.insert(kf.boneName);
+    }
+    QStringList sortedVmdBones = uniqueBonesSet.values();
+    sortedVmdBones.sort();
+    qDebug().noquote() << "  Unique bone names count in motion:" << sortedVmdBones.size();
+    qDebug().noquote() << "  Unique bone names in motion:";
+    for (int i = 0; i < sortedVmdBones.size(); i += 8) {
+        QStringList chunk = sortedVmdBones.mid(i, 8);
+        qDebug().noquote() << "   " << chunk.join(QStringLiteral(", "));
+    }
+
+    // 4. Load Barbara.pmx and compare bone names
+    qDebug().noquote() << "\n[Step 4] Checking Barbara.pmx:";
+    QFileInfo pmxInfo(pmxPath);
+    qDebug().noquote() << "  PMX Path:" << pmxPath;
+    qDebug().noquote() << "  PMX exists:" << pmxInfo.exists();
+    qDebug().noquote() << "  PMX size (bytes):" << pmxInfo.size();
+    QVERIFY2(pmxInfo.exists(), "PMX file does not exist on disk!");
+
+    PmxDocument pmxDoc;
+    QString pmxError;
+    bool pmxReadOk = PmxReader::readFromFile(pmxPath, pmxDoc, &pmxError);
+    qDebug().noquote() << "  PmxReader::readFromFile ok:" << pmxReadOk << "err:" << pmxError;
+    QVERIFY2(pmxReadOk, "Failed to load Barbara.pmx!");
+
+    qDebug().noquote() << "  Model Name JP:" << pmxDoc.modelInfo.modelNameJp;
+    qDebug().noquote() << "  Model Name EN:" << pmxDoc.modelInfo.modelNameEn;
+    qDebug().noquote() << "  Total bones in Barbara.pmx:" << pmxDoc.bones.size();
+    for (int i = 0; i < qMin<int>(25, static_cast<int>(pmxDoc.bones.size())); ++i) {
+        qDebug().noquote() << "    Model bone" << i << "JP:" << pmxDoc.bones[i].nameJp << "EN:" << pmxDoc.bones[i].nameEn;
+    }
+
+    QSet<QString> modelBonesJp;
+    QSet<QString> modelBonesEn;
+    for (const auto& b : pmxDoc.bones) {
+        if (!b.nameJp.isEmpty()) modelBonesJp.insert(b.nameJp);
+        if (!b.nameEn.isEmpty()) modelBonesEn.insert(b.nameEn);
+    }
+
+    QStringList matchedBones;
+    QStringList unmatchedBones;
+    for (const QString& bName : sortedVmdBones) {
+        if (modelBonesJp.contains(bName) || modelBonesEn.contains(bName)) {
+            matchedBones.append(bName);
+        } else {
+            unmatchedBones.append(bName);
+        }
+    }
+
+    qDebug().noquote() << "\n[Bone Matching Results]:";
+    qDebug().noquote() << "  Matched bones count:" << matchedBones.size() << "of" << sortedVmdBones.size()
+                       << QStringLiteral("(%1%)").arg(100.0 * matchedBones.size() / sortedVmdBones.size(), 0, 'f', 1);
+    qDebug().noquote() << "  Matched bones list:" << matchedBones;
+    qDebug().noquote() << "  Unmatched bones count:" << unmatchedBones.size();
+    qDebug().noquote() << "  Sample unmatched bones (first 25):" << unmatchedBones.mid(0, 25);
+
+    QVERIFY2(matchedBones.size() > 50, "At least standard humanoid skeleton bones must match!");
+
+    // 5. Evaluate animation at frame 0 and check scene deformation
+    qDebug().noquote() << "\n[Step 5] Evaluating Animation on PmxRuntimeScene:";
+    PmxRuntimeScene scene;
+    scene.loadDocument(pmxDoc);
+
+    // Store rest positions of matched bones
+    QHash<int, glm::vec3> restPositions;
+    for (const QString& bName : matchedBones) {
+        int idx = scene.findBoneByName(bName);
+        if (idx >= 0) {
+            restPositions[idx] = glm::vec3(scene.bone(idx).worldMatrix[3]); // world translation
+        }
+    }
+
+    PmxAnimationPlayer player;
+    player.loadMotion(motion);
+    qDebug().noquote() << "  Player loaded motion. MaxFrame:" << player.maxFrame()
+                       << "CurrentFrame:" << player.currentFrame();
+
+    // Check keyframes at frame 0 specifically
+    int frame0BoneKfCount = 0;
+    int movedBonesAt0 = 0;
+    for (const auto& kf : motion.boneKeyframes) {
+        if (kf.frame == 0) {
+            frame0BoneKfCount++;
+            if (glm::length(kf.translation) > 1e-4f ||
+                std::abs(kf.rotation.w - 1.0f) > 1e-4f ||
+                glm::length(glm::vec3(kf.rotation.x, kf.rotation.y, kf.rotation.z)) > 1e-4f) {
+                movedBonesAt0++;
+            }
+        }
+    }
+    qDebug().noquote() << "  VMD bone keyframes at frame 0:" << frame0BoneKfCount
+                       << "(non-identity transforms:" << movedBonesAt0 << ")";
+
+    // Apply frame 0 to scene
+    player.setFrame(0.0f);
+    player.applyToScene(scene);
+    scene.evaluate(0.0f);
+
+    int alteredBonesAtFrame0 = 0;
+    for (auto it = restPositions.begin(); it != restPositions.end(); ++it) {
+        int idx = it.key();
+        glm::vec3 curPos = glm::vec3(scene.bone(idx).worldMatrix[3]);
+        if (glm::distance(curPos, it.value()) > 1e-3f) {
+            alteredBonesAtFrame0++;
+            if (alteredBonesAtFrame0 <= 5) {
+                qDebug().noquote() << "    Bone" << scene.bone(idx).nameJp
+                                   << "moved from rest:" << it.value().x << it.value().y << it.value().z
+                                   << "to frame 0:" << curPos.x << curPos.y << curPos.z;
+            }
+        }
+    }
+    qDebug().noquote() << "  Bones with world pos change at frame 0:" << alteredBonesAtFrame0 << "of" << matchedBones.size();
+
+    // Now test frame 30 (1 second in)
+    player.setFrame(30.0f);
+    player.applyToScene(scene);
+    scene.evaluate(0.0f);
+
+    int alteredBonesAtFrame30 = 0;
+    for (auto it = restPositions.begin(); it != restPositions.end(); ++it) {
+        int idx = it.key();
+        glm::vec3 curPos = glm::vec3(scene.bone(idx).worldMatrix[3]);
+        if (glm::distance(curPos, it.value()) > 1e-3f) {
+            alteredBonesAtFrame30++;
+        }
+    }
+    qDebug().noquote() << "  Bones with world pos change at frame 30:" << alteredBonesAtFrame30 << "of" << matchedBones.size();
+
+    // Check player update with delta
+    player.play();
+    qDebug().noquote() << "  Player playing state after play():" << player.isPlaying();
+    player.update(1.0f / 30.0f);
+    qDebug().noquote() << "  Player current frame after 1 update (dt=1/30):" << player.currentFrame();
+
+    qDebug().noquote() << "========================================================\n";
 }
 
 QTEST_MAIN(TstPmxEvaluator)
