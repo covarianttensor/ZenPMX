@@ -9,10 +9,10 @@
 * **Project Name:** ZenPMX (Native Linux PMX Editor)
 * **GitHub Repository:** [`https://github.com/covarianttensor/ZenPMX`](https://github.com/covarianttensor/ZenPMX) (Public)
 * **Active Phase:** Milestone 3 (Full MMD Shader Pipeline & Interactive 3D Edit Mode)
-* **Next Target:** Ticket 3.2 (Inverted-Hull Edge Outline Pass with Per-Vertex/Per-Material Width Scaling)
-* **Overall Completion Level:** 55%
-* **Current Working Tree:** Clean (`main` branch commit `2ab3af4`)
-* **Test Suite Status:** 7/7 CTest suites passing (111 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.45s)
+* **Next Target:** Ticket 3.3 (Interactive 3D Transform Gizmos & Symmetric Editing)
+* **Overall Completion Level:** 60%
+* **Current Working Tree:** Clean (`main` branch commit `d14666f`)
+* **Test Suite Status:** 7/7 CTest suites passing (114 unit tests, 0 failures, 100% clean under ASan + UBSan in 1.35s)
 
 ---
 
@@ -44,6 +44,7 @@
 | Date / UTC | Ticket ID | Subsystem Target | Subagent | Commit | Test Status | Token Burn | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
 | 2026-10-25 01:43 | **Ticket-3.1** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | `2ab3af4` | 7/7 CTest (19/19 QtTest) | ~42k | MMD toon ramp shading, vertical V sampling, .sph/.spa sphere maps, PmxTextureCache, clamp samplers. (Strike 1 resolved). |
+| 2026-10-25 02:04 | **Ticket-3.2** | Viewport / Shaders (`PmxViewport`) | `pmx_ui_engineer` | `d14666f` | 7/7 CTest (22/22 QtTest) | ~38k | Inverted-hull outline pass, per-vertex/material width scaling, CW front-face culling, QSB deserialization test. (Strike 1 resolved). |
 
 ---
 
@@ -137,6 +138,17 @@
   - Non-hollow unit tests added in `tst_pmx_viewport.cpp`.
   - QA Re-Audit PASSED; committed at `2ab3af4`.
 
+### Incident 7: Ticket 3.2 Audit Deficiencies & Hollow Test Assertions (Strike 1)
+* **Date:** 2026-10-25 02:21 UTC
+* **Subsystem:** `PmxViewport` (`src/viewport/PmxViewportItem.cpp`, `tests/tst_pmx_viewport.cpp`)
+* **Root Cause:**
+  1. `testShaderResourcesLoaded()` asserted `size() > 0` on QSB files rather than deserializing via `QShader::fromSerialized()` and verifying `shader.isValid()`.
+  2. Missing negative `edgeScale` test coverage in `testEdgeExtrusionMath` and `testMeshVertexEdgeScalePropagation`.
+  3. Missing zero `faceVertexCount` edge case on materials with `drawFlags & 0x10 != 0`.
+  4. Missing non-finite checks `std::isfinite(mat.edgeSize)` in `partitionMaterialBatches`.
+* **Corrective Action:**
+  - Lead Architect fed exact failure log back to `pmx_ui_engineer` under Strike 1.
+  - Subagent instructed to deserialize shaders into `QShader`, add negative edgeScale assertions, test zero-vertex edge materials, and add finite guards.
 
 ---
 

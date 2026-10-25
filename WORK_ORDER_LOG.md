@@ -338,4 +338,40 @@
     5. Backface Normal Inversion: Added `if (!gl_FrontFacing) N = -N;` in `mesh.frag` for double-sided materials.
     6. Sampler Address Mode: Applied `QRhiSampler::ClampToEdge` for toon and sphere textures to prevent seam bleeding.
 
+---
 
+### Ticket 3.2: Inverted-Hull Edge Outline Pass with Per-Vertex/Per-Material Width Scaling
+* **Assigned Subagent:** `pmx_ui_engineer`
+* **Target Subsystem:** `PmxViewport` (Target 4)
+* **Date Issued:** 2026-10-25 02:04 UTC
+* **Status:** `[DONE]` (Committed at `d14666f`)
+* **Specification:**
+  - Shaders (`src/viewport/shaders/pmx_edge.vert`, `src/viewport/shaders/pmx_edge.frag`, `src/viewport/shaders/mesh.vert`):
+    - `pmx_edge.vert`: Extrudes vertex along its normal scaled by `material.edgeSize * vertex.edgeScale * 0.01`. Uses uniform block `FrameAndMaterialUbo` (binding 0).
+    - `pmx_edge.frag`: Outputs solid `u_edgeColor` (RGBA).
+    - Update `mesh.vert` to declare location 3 `in float inEdgeScale` to match shared `MeshVertex` layout.
+  - Vertex Layout & Staging (`src/viewport/PmxViewportItem.h/.cpp`):
+    - Extend `MeshVertex` to include `float edgeScale = 1.0f`.
+    - Set attribute location 3 in `QRhiVertexInputLayout`.
+    - Copy `mv.edgeScale = v.edgeScale` in `PmxRhiRenderer::synchronize()`.
+  - Pipeline & Render Pass:
+    - Add `m_edgePipeline` with front-face culling (`CullFront`), depth test `LessOrEqual`, depth write enabled, alpha blending.
+    - Filter `StagedMaterialBatch` with `hasEdge = ((mat.drawFlags & 0x10) != 0) && (mat.edgeSize > 0.0f) && (mat.edgeColor.a > 0.0f)`.
+    - Render edge outline pass for all batches with `hasEdge == true`.
+  - Unit Tests (`tests/tst_pmx_viewport.cpp`):
+    - Verify edge shader resource loading, extrusion math, `hasEdge` filtering, and vertex edgeScale staging.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+
+#### Ticket 3.2 — Revision 2 (Strike 1 Remediation)
+* **Date & Timestamp:** 2026-10-25 02:21 UTC
+* **Reason for Revision:**
+  - Strike 1 audit failure detected by `pmx_qa_adversary`:
+    1. Hollow test assertion in `testShaderResourcesLoaded`: validated `size() > 0` instead of deserializing with `QShader::fromSerialized()` and verifying `shader.isValid()`.
+    2. Missing negative `edgeScale` test coverage in `testEdgeExtrusionMath` and `testMeshVertexEdgeScalePropagation`.
+    3. Missing zero `faceVertexCount` edge case on materials with `drawFlags & 0x10 != 0`.
+    4. Defense-in-depth: non-finite `std::isfinite(mat.edgeSize)` checks missing in `partitionMaterialBatches`.
+* **Revision Directives:**
+  - Deserialize all shaders via `QShader::fromSerialized()` and assert `shader.isValid()`.
+  - Add explicit assertions for negative `edgeScale` (`-1.0f`).
+  - Add test asserting `hasEdge == true` and `indexCount == 0` for empty materials (`faceVertexCount == 0`).
+  - Add `std::isfinite(mat.edgeSize)` and `std::isfinite(mat.edgeColor.a)` checks in `partitionMaterialBatches`.
