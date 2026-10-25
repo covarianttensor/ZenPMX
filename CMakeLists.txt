@@ -49,6 +49,27 @@ if(NOT TARGET glm::glm)
     endif()
 endif()
 
+list(APPEND CMAKE_PREFIX_PATH "$ENV{HOME}/.local" "/home/oscarc/.local")
+
+find_package(assimp QUIET)
+if(NOT TARGET assimp::assimp)
+    find_package(Assimp QUIET)
+endif()
+if(TARGET assimp::assimp)
+    set(ASSIMP_TARGET assimp::assimp)
+elseif(TARGET assimp)
+    set(ASSIMP_TARGET assimp)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(ASSIMP REQUIRED assimp IMPORTED_TARGET)
+    if(TARGET PkgConfig::ASSIMP)
+        set(ASSIMP_TARGET PkgConfig::ASSIMP)
+    else()
+        set(ASSIMP_TARGET ${ASSIMP_LIBRARIES})
+        include_directories(${ASSIMP_INCLUDE_DIRS})
+    endif()
+endif()
+
 add_library(PmxCore STATIC
     src/core/PmxTypes.h
     src/core/PmxDocument.h
@@ -58,6 +79,8 @@ add_library(PmxCore STATIC
     src/core/PmxWriter.cpp
     src/core/PmdImporter.h
     src/core/PmdImporter.cpp
+    src/core/AssimpImporter.h
+    src/core/AssimpImporter.cpp
     src/core/PmxMerger.h
     src/core/PmxMerger.cpp
 )
@@ -70,6 +93,7 @@ target_include_directories(PmxCore PUBLIC
 target_link_libraries(PmxCore PUBLIC
     Qt6::Core
     glm::glm
+    ${ASSIMP_TARGET}
 )
 
 add_library(PmxModels STATIC
@@ -311,3 +335,19 @@ target_link_libraries(tst_pmx_merger PRIVATE
 )
 
 add_test(NAME tst_pmx_merger COMMAND tst_pmx_merger)
+ 
+add_executable(tst_assimp_import
+    tests/tst_assimp_import.cpp
+)
+
+set_target_properties(tst_assimp_import PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
+)
+
+target_link_libraries(tst_assimp_import PRIVATE
+    PmxCore
+    Qt6::Test
+    ${ASSIMP_TARGET}
+)
+
+add_test(NAME tst_assimp_import COMMAND tst_assimp_import)
