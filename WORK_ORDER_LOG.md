@@ -194,3 +194,34 @@
   - Parse optional PMD Bullet Physics extension (rigid bodies and 6DoF spring constraints) if present.
   - Update `CMakeLists.txt` adding `PmdImporter.h/.cpp` to `PmxCore` and create test suite `tests/tst_pmd_import.cpp`.
 * **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmd_import`
+
+---
+
+### Ticket 2.4: Kitbash Merger Engine (`PmxMerger.cpp` — 追加選択)
+* **Assigned Subagent:** `pmx_core_engineer`
+* **Target Subsystem:** `PmxCore` (Target 1) & `PmxModels` (Target 3)
+* **Date Issued:** 2026-10-25 00:20 UTC
+* **Status:** `[DONE]` (Committed at `44caf36`)
+* **Specification:**
+  - Implement `src/core/PmxMerger.h` and `src/core/PmxMerger.cpp`:
+    - Non-destructive merging of a secondary PMX/PMD model (`incomingDoc`) into an existing base model (`baseDoc`).
+    - Define `MergeOptions`: `mergeIdenticalBones` (bool, default true), `offsetPosition` (`glm::vec3`, default 0), `importPhysics` (bool, default true), `importMorphs` (bool, default true), `importDisplayFrames` (bool, default true).
+    - 100% mathematical index remapping across all 7 entity types:
+      - Vertices & Faces: `faceIndex += baseVertexCount`.
+      - Textures: Deduplicate identical texture paths or append.
+      - Materials: Remap `textureIndex` and `sphereTextureIndex`.
+      - Bones: Deduplicate identical bone names (`nameJp` / `nameEn`), re-parent child bones to existing base bones, remap `parentBoneIndex`, `tailBoneIndex`, `appendBoneIndex`, and IK link bones. Remap vertex bone weights (BDEF1, BDEF2, BDEF4, SDEF, QDEF).
+      - Morphs: Remap vertex morph offsets (`offset.vertexIndex += baseVertexCount`), bone morphs (`boneMap`), material morphs (`baseMaterialCount + matIndex`), and group morphs (`baseMorphCount + morphIndex`).
+      - Display Frames: Remap frame item indices (bones and morphs), merge into existing frames with matching names or create new frames.
+      - Bullet Physics: Remap rigid body `boneIndex`, joint `rigidBodyIndexA` and `rigidBodyIndexB`.
+    - Recalculate header index sizes dynamically based on final vector counts.
+  - Integrate with `PmxDocumentController`:
+    - Add `bool mergeModel(const PmxDocument& incomingDoc, const MergeOptions& options = {}, QString* errorMessage = nullptr);` which pushes an undoable `PmxDocumentSnapshotCommand` onto `undoStack()`, enabling instant full undo and redo.
+  - Create test suite `tests/tst_pmx_merger.cpp`:
+    - Test kitbashing hair/accessories onto base model (vertices, materials, textures).
+    - Test standard bone deduplication and re-parenting.
+    - Test physics remapping (rigid body bone indices and joint body indices).
+    - Test morph remapping across vertex, bone, and material morphs.
+    - Test complete Undo and Redo cycle via `PmxDocumentController::mergeModel` with zero state drift.
+  - Update `CMakeLists.txt` adding `PmxMerger.h/.cpp` to `PmxCore`, and registering `tst_pmx_merger`.
+* **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_merger`
