@@ -92,9 +92,37 @@ ApplicationWindow {
             }
 
             CheckBox {
+                id: physicsCheck
+                text: "Physics"
+                checked: true
+            }
+
+            CheckBox {
+                id: jointsCheck
+                text: "Joints"
+                checked: true
+            }
+
+            CheckBox {
                 id: wireframeCheck
                 text: "Wireframe"
                 checked: false
+            }
+
+            ToolSeparator {}
+
+            Label {
+                text: "Gizmo:"
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            ComboBox {
+                id: gizmoCombo
+                model: ["None", "Translate", "Rotate", "Scale"]
+                currentIndex: viewport.gizmoMode
+                onActivated: function(index) {
+                    viewport.gizmoMode = index
+                }
             }
 
             Item { Layout.fillWidth: true }
@@ -142,6 +170,8 @@ ApplicationWindow {
                 controller: bridge.controller
                 showGrid: gridCheck.checked
                 showBones: bonesCheck.checked
+                showRigidBodies: physicsCheck.checked
+                showJoints: jointsCheck.checked
                 wireframe: wireframeCheck.checked
                 focus: true
             }

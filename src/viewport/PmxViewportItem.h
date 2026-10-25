@@ -105,6 +105,12 @@ private:
     QRhiBuffer* m_boneVertexBuffer = nullptr;
     quint32 m_boneVertexCount = 0;
 
+    QRhiBuffer* m_physicsVertexBuffer = nullptr;
+    quint32 m_physicsVertexCount = 0;
+
+    QRhiBuffer* m_jointVertexBuffer = nullptr;
+    quint32 m_jointVertexCount = 0;
+
     QRhiBuffer* m_gizmoVertexBuffer = nullptr;
     quint32 m_gizmoVertexCount = 0;
 
@@ -113,6 +119,8 @@ private:
     std::vector<StagedMaterialBatch> m_stagedMaterials;
     std::vector<GpuMaterialBatch> m_gpuBatches;
     std::vector<LineVertex> m_stagedBoneLines;
+    std::vector<LineVertex> m_stagedPhysicsLines;
+    std::vector<LineVertex> m_stagedJointLines;
     std::vector<LineVertex> m_stagedGizmoLines;
     bool m_meshDataDirty = false;
     bool m_materialsDirty = false;
@@ -126,8 +134,13 @@ private:
     float m_aspect = 1.0f;
     bool m_showGrid = true;
     bool m_showBones = true;
+    bool m_showRigidBodies = true;
+    bool m_showJoints = true;
     bool m_wireframe = false;
     quint64 m_syncedRevision = 0;
+    int m_syncedSelectedBone = -1;
+    int m_syncedSelectedRigidBody = -1;
+    int m_syncedSelectedJoint = -1;
 };
 
 class PmxViewportItem : public QQuickRhiItem {
@@ -137,6 +150,8 @@ class PmxViewportItem : public QQuickRhiItem {
     Q_PROPERTY(quint64 modelRevision READ modelRevision NOTIFY modelRevisionChanged)
     Q_PROPERTY(bool showGrid READ showGrid WRITE setShowGrid NOTIFY showGridChanged)
     Q_PROPERTY(bool showBones READ showBones WRITE setShowBones NOTIFY showBonesChanged)
+    Q_PROPERTY(bool showRigidBodies READ showRigidBodies WRITE setShowRigidBodies NOTIFY showRigidBodiesChanged)
+    Q_PROPERTY(bool showJoints READ showJoints WRITE setShowJoints NOTIFY showJointsChanged)
     Q_PROPERTY(bool wireframe READ wireframe WRITE setWireframe NOTIFY wireframeChanged)
     Q_PROPERTY(int gizmoMode READ gizmoModeInt WRITE setGizmoModeInt NOTIFY gizmoModeChanged)
     Q_PROPERTY(int coordSpace READ coordSpaceInt WRITE setCoordSpaceInt NOTIFY coordSpaceChanged)
@@ -169,6 +184,12 @@ public:
     bool showBones() const { return m_showBones; }
     void setShowBones(bool show);
 
+    bool showRigidBodies() const { return m_showRigidBodies; }
+    void setShowRigidBodies(bool show);
+
+    bool showJoints() const { return m_showJoints; }
+    void setShowJoints(bool show);
+
     bool wireframe() const { return m_wireframe; }
     void setWireframe(bool wireframe);
 
@@ -198,6 +219,8 @@ signals:
     void modelRevisionChanged();
     void showGridChanged();
     void showBonesChanged();
+    void showRigidBodiesChanged();
+    void showJointsChanged();
     void wireframeChanged();
     void gizmoModeChanged();
     void coordSpaceChanged();
@@ -220,6 +243,8 @@ private:
     quint64 m_modelRevision = 0;
     bool m_showGrid = true;
     bool m_showBones = true;
+    bool m_showRigidBodies = true;
+    bool m_showJoints = true;
     bool m_wireframe = false;
 
     PmxGizmo m_gizmo;

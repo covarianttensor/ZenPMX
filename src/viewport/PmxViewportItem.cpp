@@ -1,4 +1,5 @@
 #include "viewport/PmxViewportItem.h"
+#include "viewport/PmxWireframeRenderer.h"
 #include "models/PmxUndoCommands.h"
 #include <QFile>
 #include <QFileInfo>
@@ -54,6 +55,8 @@ PmxRhiRenderer::~PmxRhiRenderer() {
     delete m_meshIndexBuffer;
     delete m_gridVertexBuffer;
     delete m_boneVertexBuffer;
+    delete m_physicsVertexBuffer;
+    delete m_jointVertexBuffer;
     delete m_gizmoVertexBuffer;
 
     m_textureCache.clear();
@@ -253,45 +256,47 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
     m_eyePos = vp->camera()->eyePosition();
     m_showGrid = vp->showGrid();
     m_showBones = vp->showBones();
+    m_showRigidBodies = vp->showRigidBodies();
+    m_showJoints = vp->showJoints();
     m_wireframe = vp->wireframe();
 
-    if (m_syncedRevision != vp->modelRevision()) {
+    int selBone = -1;
+    int selRb = -1;
+    int selJoint = -1;
+    if (vp->controller() && vp->controller()->selectionManager()) {
+        auto* sm = vp->controller()->selectionManager();
+        auto bones = sm->selectedBones();
+        if (!bones.isEmpty()) selBone = bones.first();
+        auto rbs = sm->selectedRigidBodies();
+        if (!rbs.isEmpty()) selRb = rbs.first();
+        auto joints = sm->selectedJoints();
+        if (!joints.isEmpty()) selJoint = joints.first();
+    }
+
+    if (m_syncedRevision != vp->modelRevision() ||
+        m_syncedSelectedBone != selBone ||
+        m_syncedSelectedRigidBody != selRb ||
+        m_syncedSelectedJoint != selJoint) {
         m_syncedRevision = vp->modelRevision();
+        m_syncedSelectedBone = selBone;
+        m_syncedSelectedRigidBody = selRb;
+        m_syncedSelectedJoint = selJoint;
+
         m_stagedVertices.clear();
         m_stagedIndices.clear();
         m_stagedMaterials.clear();
         m_stagedBoneLines.clear();
+        m_stagedPhysicsLines.clear();
+        m_stagedJointLines.clear();
 
         if (vp->controller()) {
             const auto& doc = vp->controller()->document();
             m_stagedVertices = PmxViewportItem::stageVertices(doc);
             m_stagedMaterials = PmxViewportItem::partitionMaterialBatches(doc, m_stagedIndices);
 
-            // Build bone overlay lines
-            for (size_t bi = 0; bi < doc.bones.size(); ++bi) {
-                const auto& b = doc.bones[bi];
-                glm::vec3 bPos = PmxCamera::toRightHanded(b.position);
-                if (b.boneFlags & 0x0001) { // TailIsBone
-                    if (b.tailBoneIndex >= 0 && static_cast<size_t>(b.tailBoneIndex) < doc.bones.size()) {
-                        glm::vec3 tailPos = PmxCamera::toRightHanded(doc.bones[b.tailBoneIndex].position);
-                        m_stagedBoneLines.push_back({ bPos, glm::vec4(0.2f, 0.8f, 1.0f, 1.0f) });
-                        m_stagedBoneLines.push_back({ tailPos, glm::vec4(0.2f, 0.8f, 1.0f, 1.0f) });
-                    }
-                } else if (glm::length(b.tailOffset) > 0.001f) {
-                    glm::vec3 tailPos = PmxCamera::toRightHanded(b.position + b.tailOffset);
-                    m_stagedBoneLines.push_back({ bPos, glm::vec4(0.2f, 0.8f, 1.0f, 1.0f) });
-                    m_stagedBoneLines.push_back({ tailPos, glm::vec4(0.2f, 0.8f, 1.0f, 1.0f) });
-                }
-
-                // Cross marker at bone position
-                float s = 0.2f;
-                m_stagedBoneLines.push_back({ bPos - glm::vec3(s,0,0), glm::vec4(1.0f, 0.2f, 0.2f, 1.0f) });
-                m_stagedBoneLines.push_back({ bPos + glm::vec3(s,0,0), glm::vec4(1.0f, 0.2f, 0.2f, 1.0f) });
-                m_stagedBoneLines.push_back({ bPos - glm::vec3(0,s,0), glm::vec4(0.2f, 1.0f, 0.2f, 1.0f) });
-                m_stagedBoneLines.push_back({ bPos + glm::vec3(0,s,0), glm::vec4(0.2f, 1.0f, 0.2f, 1.0f) });
-                m_stagedBoneLines.push_back({ bPos - glm::vec3(0,0,s), glm::vec4(0.2f, 0.2f, 1.0f, 1.0f) });
-                m_stagedBoneLines.push_back({ bPos + glm::vec3(0,0,s), glm::vec4(0.2f, 0.2f, 1.0f, 1.0f) });
-            }
+            m_stagedBoneLines = PmxWireframeRenderer::buildBoneWireframes(doc, selBone);
+            m_stagedPhysicsLines = PmxWireframeRenderer::buildRigidBodyWireframes(doc, selRb);
+            m_stagedJointLines = PmxWireframeRenderer::buildJointWireframes(doc, selJoint);
         }
 
         m_meshDataDirty = true;
@@ -345,6 +350,32 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
             m_boneVertexCount = static_cast<quint32>(m_stagedBoneLines.size());
         } else {
             m_boneVertexCount = 0;
+        }
+
+        if (!m_stagedPhysicsLines.empty()) {
+            quint32 pSize = static_cast<quint32>(m_stagedPhysicsLines.size() * sizeof(LineVertex));
+            if (!m_physicsVertexBuffer || m_physicsVertexBuffer->size() != pSize) {
+                delete m_physicsVertexBuffer;
+                m_physicsVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, pSize);
+                m_physicsVertexBuffer->create();
+            }
+            u->uploadStaticBuffer(m_physicsVertexBuffer, 0, pSize, m_stagedPhysicsLines.data());
+            m_physicsVertexCount = static_cast<quint32>(m_stagedPhysicsLines.size());
+        } else {
+            m_physicsVertexCount = 0;
+        }
+
+        if (!m_stagedJointLines.empty()) {
+            quint32 jSize = static_cast<quint32>(m_stagedJointLines.size() * sizeof(LineVertex));
+            if (!m_jointVertexBuffer || m_jointVertexBuffer->size() != jSize) {
+                delete m_jointVertexBuffer;
+                m_jointVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, jSize);
+                m_jointVertexBuffer->create();
+            }
+            u->uploadStaticBuffer(m_jointVertexBuffer, 0, jSize, m_stagedJointLines.data());
+            m_jointVertexCount = static_cast<quint32>(m_stagedJointLines.size());
+        } else {
+            m_jointVertexCount = 0;
         }
     }
 
@@ -520,6 +551,24 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
         QRhiCommandBuffer::VertexInput vInput(m_boneVertexBuffer, 0);
         cb->setVertexInput(0, 1, &vInput);
         cb->draw(m_boneVertexCount);
+    }
+
+    // 4b. Rigid Body (Physics) Wireframe Overlay
+    if (m_showRigidBodies && m_physicsVertexBuffer && m_physicsVertexCount > 0 && m_linePipeline) {
+        cb->setGraphicsPipeline(m_linePipeline);
+        cb->setShaderResources(m_lineSrb);
+        QRhiCommandBuffer::VertexInput vInput(m_physicsVertexBuffer, 0);
+        cb->setVertexInput(0, 1, &vInput);
+        cb->draw(m_physicsVertexCount);
+    }
+
+    // 4c. Joint Wireframe Overlay
+    if (m_showJoints && m_jointVertexBuffer && m_jointVertexCount > 0 && m_linePipeline) {
+        cb->setGraphicsPipeline(m_linePipeline);
+        cb->setShaderResources(m_lineSrb);
+        QRhiCommandBuffer::VertexInput vInput(m_jointVertexBuffer, 0);
+        cb->setVertexInput(0, 1, &vInput);
+        cb->draw(m_jointVertexCount);
     }
 
     // 5. Gizmo Overlay
@@ -753,6 +802,22 @@ void PmxViewportItem::setShowBones(bool show) {
     }
 }
 
+void PmxViewportItem::setShowRigidBodies(bool show) {
+    if (m_showRigidBodies != show) {
+        m_showRigidBodies = show;
+        emit showRigidBodiesChanged();
+        update();
+    }
+}
+
+void PmxViewportItem::setShowJoints(bool show) {
+    if (m_showJoints != show) {
+        m_showJoints = show;
+        emit showJointsChanged();
+        update();
+    }
+}
+
 void PmxViewportItem::setWireframe(bool wireframe) {
     if (m_wireframe != wireframe) {
         m_wireframe = wireframe;
@@ -815,7 +880,6 @@ void PmxViewportItem::updateGizmoPosition() {
             glm::vec3 centroidLH = sum / static_cast<float>(validCount);
             m_gizmo.setPosition(PmxCamera::toRightHanded(centroidLH));
             m_gizmo.setRotation(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-            update();
         }
     } else if (!selectedVertices.empty()) {
         glm::vec3 sum(0.0f);
@@ -830,9 +894,10 @@ void PmxViewportItem::updateGizmoPosition() {
             glm::vec3 centroidLH = sum / static_cast<float>(validCount);
             m_gizmo.setPosition(PmxCamera::toRightHanded(centroidLH));
             m_gizmo.setRotation(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-            update();
         }
     }
+
+    update();
 }
 
 void PmxViewportItem::mousePressEvent(QMouseEvent* event) {

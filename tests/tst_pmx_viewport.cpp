@@ -14,6 +14,7 @@
 
 #include "viewport/PmxTextureCache.h"
 #include "viewport/PmxGizmo.h"
+#include "viewport/PmxWireframeRenderer.h"
 
 #include <QSignalSpy>
 #include <QTest>
@@ -61,6 +62,11 @@ private slots:
     void testVertexTransformCommandUndoRedo();
     void testBoneTransformCommandUndoRedo();
     void testViewportGizmoIntegration();
+    void testBoneWireframeOctahedron();
+    void testRigidBodyWireframeShapesAndColors();
+    void testJointWireframeCrossLimitArcsAndAnchors();
+    void testWireframeRendererRobustness();
+    void testViewportWireframeToggles();
 };
 
 void tst_pmx_viewport::testCameraDefaults() {
@@ -1504,6 +1510,524 @@ void tst_pmx_viewport::testViewportGizmoIntegration() {
     controller.selectionManager()->clearAll();
     viewport.updateGizmoPosition();
     QVERIFY(true);
+
+    // Test selection of rigid body and joint triggers updateGizmoPosition without crash
+    controller.selectionManager()->setSelectedRigidBodies({ 0 });
+    viewport.updateGizmoPosition();
+    QCOMPARE(viewport.gizmo()->position(), expectedRH);
+
+    controller.selectionManager()->setSelectedJoints({ 0 });
+    viewport.updateGizmoPosition();
+    QCOMPARE(viewport.gizmo()->position(), expectedRH);
+}
+
+void tst_pmx_viewport::testBoneWireframeOctahedron() {
+    PmxDocument doc;
+    // Bone 0: PMX LH pos (0, 0, 5), TailIsBone to Bone 1
+    PmxBone b0;
+    b0.position = glm::vec3(0.0f, 0.0f, 5.0f);
+    b0.boneFlags = 0x0001; // Tail is bone
+    b0.tailBoneIndex = 1;
+    b0.parentBoneIndex = -1;
+    doc.bones.push_back(b0);
+
+    // Bone 1: pos (0, 10.0f, 5.0f), unlinked (tailOffset = 0), parent is Bone 0
+    PmxBone b1;
+    b1.position = glm::vec3(0.0f, 10.0f, 5.0f);
+    b1.boneFlags = 0x0000;
+    b1.tailOffset = glm::vec3(0.0f);
+    b1.parentBoneIndex = 0;
+    doc.bones.push_back(b1);
+
+    // Bone 2: pos (5.0f, 0.0f, 0.0f), tailOffset = (0, 4.0f, 0), parent = -1
+    PmxBone b2;
+    b2.position = glm::vec3(5.0f, 0.0f, 0.0f);
+    b2.boneFlags = 0x0000;
+    b2.tailOffset = glm::vec3(0.0f, 4.0f, 0.0f);
+    b2.parentBoneIndex = -1;
+    doc.bones.push_back(b2);
+
+    // Unselected generation
+    auto lines = PmxWireframeRenderer::buildBoneWireframes(doc, -1);
+    // b0: 24 vertices (octahedral pyramid)
+    // b1: 2 vertices (parent line to b0) + 24 vertices (localized octahedron) = 26 vertices
+    // b2: 24 vertices (octahedral pyramid)
+    // Total = 24 + 26 + 24 = 74 vertices (37 line segments)
+    QCOMPARE(lines.size(), size_t(74));
+
+    // Verify all vertices are finite and RH handedness applied (+Z in PMX -> -Z in RH)
+    for (const auto& v : lines) {
+        QVERIFY(std::isfinite(v.position.x));
+        QVERIFY(std::isfinite(v.position.y));
+        QVERIFY(std::isfinite(v.position.z));
+    }
+
+    // Exact coordinate checks for Bone 0 diamond pyramid:
+    // pHead = (0, 0, -5), pTail = (0, 10, -5)
+    // v = (0, 10, 0), L = 10, dir = (0, 1, 0), up = (1, 0, 0)
+    // cross(dir, up) = (0, 0, -1) -> u = (0, 0, -0.25)
+    // w = cross(dir, u) = (-0.25, 0, 0)
+    // pBase = pHead + 0.2 * v = (0, 2, -5)
+    glm::vec3 pHead0(0.0f, 0.0f, -5.0f);
+    glm::vec3 pTail0(0.0f, 10.0f, -5.0f);
+    glm::vec3 d0(0.0f, 2.0f, -5.25f);
+    glm::vec3 d1(-0.25f, 2.0f, -5.0f);
+    glm::vec3 d2(0.0f, 2.0f, -4.75f);
+    glm::vec3 d3(0.25f, 2.0f, -5.0f);
+
+    // Lines from pHead to base diamond points
+    QCOMPARE(lines[0].position, pHead0);
+    QCOMPARE(lines[1].position, d0);
+    QCOMPARE(lines[2].position, pHead0);
+    QCOMPARE(lines[3].position, d1);
+    QCOMPARE(lines[4].position, pHead0);
+    QCOMPARE(lines[5].position, d2);
+    QCOMPARE(lines[6].position, pHead0);
+    QCOMPARE(lines[7].position, d3);
+
+    // Lines connecting diamond base ring
+    QCOMPARE(lines[8].position, d0);
+    QCOMPARE(lines[9].position, d1);
+    QCOMPARE(lines[10].position, d1);
+    QCOMPARE(lines[11].position, d2);
+    QCOMPARE(lines[12].position, d2);
+    QCOMPARE(lines[13].position, d3);
+    QCOMPARE(lines[14].position, d3);
+    QCOMPARE(lines[15].position, d0);
+
+    // Lines from base diamond points to pTail
+    QCOMPARE(lines[16].position, d0);
+    QCOMPARE(lines[17].position, pTail0);
+    QCOMPARE(lines[18].position, d1);
+    QCOMPARE(lines[19].position, pTail0);
+    QCOMPARE(lines[20].position, d2);
+    QCOMPARE(lines[21].position, pTail0);
+    QCOMPARE(lines[22].position, d3);
+    QCOMPARE(lines[23].position, pTail0);
+
+    // Exact coordinate checks for Bone 1:
+    // Parent bone connecting line (b0 head to b1 head)
+    glm::vec3 pHead1(0.0f, 10.0f, -5.0f);
+    QCOMPARE(lines[24].position, pHead0);
+    QCOMPARE(lines[25].position, pHead1);
+
+    // Fallback localized octahedron of radius 0.2f centered at pHead1
+    const float rOct = 0.2f;
+    glm::vec3 octTop = pHead1 + glm::vec3(0.0f, rOct, 0.0f);
+    glm::vec3 octBot = pHead1 - glm::vec3(0.0f, rOct, 0.0f);
+    glm::vec3 octR0 = pHead1 + glm::vec3(rOct, 0.0f, 0.0f);
+    glm::vec3 octR1 = pHead1 + glm::vec3(0.0f, 0.0f, rOct);
+    glm::vec3 octR2 = pHead1 - glm::vec3(rOct, 0.0f, 0.0f);
+    glm::vec3 octR3 = pHead1 - glm::vec3(0.0f, 0.0f, rOct);
+
+    // Top to ring
+    QCOMPARE(lines[26].position, octTop); QCOMPARE(lines[27].position, octR0);
+    QCOMPARE(lines[28].position, octTop); QCOMPARE(lines[29].position, octR1);
+    QCOMPARE(lines[30].position, octTop); QCOMPARE(lines[31].position, octR2);
+    QCOMPARE(lines[32].position, octTop); QCOMPARE(lines[33].position, octR3);
+
+    // Ring lines
+    QCOMPARE(lines[34].position, octR0); QCOMPARE(lines[35].position, octR1);
+    QCOMPARE(lines[36].position, octR1); QCOMPARE(lines[37].position, octR2);
+    QCOMPARE(lines[38].position, octR2); QCOMPARE(lines[39].position, octR3);
+    QCOMPARE(lines[40].position, octR3); QCOMPARE(lines[41].position, octR0);
+
+    // Bottom to ring
+    QCOMPARE(lines[42].position, octBot); QCOMPARE(lines[43].position, octR0);
+    QCOMPARE(lines[44].position, octBot); QCOMPARE(lines[45].position, octR1);
+    QCOMPARE(lines[46].position, octBot); QCOMPARE(lines[47].position, octR2);
+    QCOMPARE(lines[48].position, octBot); QCOMPARE(lines[49].position, octR3);
+
+    // Unselected bone color
+    QCOMPARE(lines[0].color, glm::vec4(0.2f, 0.8f, 1.0f, 0.9f));
+
+    // Test selection of bone 0: bone 0 lines should be highlighted yellow/orange
+    auto selectedLines = PmxWireframeRenderer::buildBoneWireframes(doc, 0);
+    QCOMPARE(selectedLines.size(), size_t(74));
+    QCOMPARE(selectedLines[0].color, glm::vec4(1.0f, 0.8f, 0.1f, 1.0f));
+    // Bone 1 lines should still be unselected color
+    QCOMPARE(selectedLines[24].color, glm::vec4(0.2f, 0.8f, 1.0f, 0.9f));
+}
+
+void tst_pmx_viewport::testRigidBodyWireframeShapesAndColors() {
+    PmxDocument doc;
+
+    // RB 0: Sphere (shape 0), size.x = 2.0f, mode 0 (Static/FollowBone)
+    PmxRigidBody rbSphere;
+    rbSphere.shape = 0;
+    rbSphere.position = glm::vec3(0.0f, 10.0f, 2.0f);
+    rbSphere.rotation = glm::vec3(0.0f);
+    rbSphere.size = glm::vec3(2.0f, 0.0f, 0.0f);
+    rbSphere.physicsMode = 0;
+    doc.rigidBodies.push_back(rbSphere);
+
+    // RB 1: Box (shape 1), size = (1.0f, 2.0f, 3.0f), mode 1 (Dynamic)
+    PmxRigidBody rbBox;
+    rbBox.shape = 1;
+    rbBox.position = glm::vec3(5.0f, 0.0f, 0.0f);
+    rbBox.rotation = glm::vec3(0.0f);
+    rbBox.size = glm::vec3(1.0f, 2.0f, 3.0f);
+    rbBox.physicsMode = 1;
+    doc.rigidBodies.push_back(rbBox);
+
+    // RB 2: Capsule (shape 2), size = (1.0f, 4.0f, 0.0f), mode 2 (Dynamic+Bone)
+    PmxRigidBody rbCapsule;
+    rbCapsule.shape = 2;
+    rbCapsule.position = glm::vec3(-5.0f, 0.0f, 0.0f);
+    rbCapsule.rotation = glm::vec3(0.0f);
+    rbCapsule.size = glm::vec3(1.0f, 4.0f, 0.0f);
+    rbCapsule.physicsMode = 2;
+    doc.rigidBodies.push_back(rbCapsule);
+
+    // Unselected build
+    auto lines = PmxWireframeRenderer::buildRigidBodyWireframes(doc, -1);
+    // Sphere: 3 circles * 24 segments * 2 = 144 vertices
+    // Box: 12 edges * 2 = 24 vertices
+    // Capsule: 2 rings (48 each = 96) + 4 vertical sides (8) + 4 dome arcs (12 segs each * 2 = 96) = 200 vertices
+    // Total = 144 + 24 + 200 = 368 vertices
+    QCOMPARE(lines.size(), size_t(368));
+
+    // Verify finite coordinates
+    for (const auto& v : lines) {
+        QVERIFY(std::isfinite(v.position.x));
+        QVERIFY(std::isfinite(v.position.y));
+        QVERIFY(std::isfinite(v.position.z));
+    }
+
+    // Verify mode colors
+    // Mode 0: Sky Blue (0.2, 0.55, 1.0, 0.85)
+    QCOMPARE(lines[0].color, glm::vec4(0.2f, 0.55f, 1.0f, 0.85f));
+    // Mode 1: Bright Orange (1.0, 0.5, 0.05, 0.85)
+    QCOMPARE(lines[144].color, glm::vec4(1.0f, 0.5f, 0.05f, 0.85f));
+    // Mode 2: Golden Yellow (1.0, 0.85, 0.1, 0.85)
+    QCOMPARE(lines[144 + 24].color, glm::vec4(1.0f, 0.85f, 0.1f, 0.85f));
+
+    // Test selection of RB 1 (Box)
+    auto selectedLines = PmxWireframeRenderer::buildRigidBodyWireframes(doc, 1);
+    QCOMPARE(selectedLines.size(), size_t(368));
+    QCOMPARE(selectedLines[144].color, glm::vec4(1.0f, 0.95f, 0.3f, 1.0f));
+    // Sphere should remain Mode 0 color
+    QCOMPARE(selectedLines[0].color, glm::vec4(0.2f, 0.55f, 1.0f, 0.85f));
+
+    // Exact sphere radius points for unrotated sphere at p = (0, 10, -2), r = 2.0f
+    glm::vec3 pSph(0.0f, 10.0f, -2.0f);
+    float rSph = 2.0f;
+    QVERIFY(glm::distance(lines[0].position, pSph + glm::vec3(rSph, 0.0f, 0.0f)) < 1e-4f);
+    QVERIFY(glm::distance(lines[12].position, pSph + glm::vec3(0.0f, rSph, 0.0f)) < 1e-4f);
+    QVERIFY(glm::distance(lines[24].position, pSph - glm::vec3(rSph, 0.0f, 0.0f)) < 1e-4f);
+    QVERIFY(glm::distance(lines[36].position, pSph - glm::vec3(0.0f, rSph, 0.0f)) < 1e-4f);
+    QVERIFY(glm::distance(lines[48 + 12].position, pSph + glm::vec3(0.0f, 0.0f, rSph)) < 1e-4f);
+    QVERIFY(glm::distance(lines[48 + 36].position, pSph - glm::vec3(0.0f, 0.0f, rSph)) < 1e-4f);
+
+    // Handedness check: Sphere pos PMX (0, 10, 2) -> RH (0, 10, -2)
+    glm::vec3 sphereCenter(0.0f);
+    for (size_t i = 0; i < 144; ++i) {
+        sphereCenter += lines[i].position;
+    }
+    sphereCenter /= 144.0f;
+    QVERIFY(std::abs(sphereCenter.x - 0.0f) < 0.01f);
+    QVERIFY(std::abs(sphereCenter.y - 10.0f) < 0.01f);
+    QVERIFY(std::abs(sphereCenter.z - (-2.0f)) < 0.01f);
+
+    // =========================================================================
+    // Non-zero Euler Rotation Tests on Rigid Bodies (pitch = 45 deg, yaw = 30 deg)
+    // =========================================================================
+    PmxDocument rotDoc;
+    glm::vec3 rotEuler(glm::radians(45.0f), glm::radians(30.0f), 0.0f);
+
+    // Rotated Sphere
+    PmxRigidBody rbSphRot;
+    rbSphRot.shape = 0;
+    rbSphRot.position = glm::vec3(1.0f, 2.0f, 3.0f);
+    rbSphRot.rotation = rotEuler;
+    rbSphRot.size = glm::vec3(1.5f, 0.0f, 0.0f);
+    rotDoc.rigidBodies.push_back(rbSphRot);
+
+    // Rotated Box
+    PmxRigidBody rbBoxRot;
+    rbBoxRot.shape = 1;
+    rbBoxRot.position = glm::vec3(-2.0f, 4.0f, 1.0f);
+    rbBoxRot.rotation = rotEuler;
+    rbBoxRot.size = glm::vec3(1.0f, 2.0f, 0.5f);
+    rotDoc.rigidBodies.push_back(rbBoxRot);
+
+    // Rotated Capsule
+    PmxRigidBody rbCapRot;
+    rbCapRot.shape = 2;
+    rbCapRot.position = glm::vec3(3.0f, 0.0f, -2.0f);
+    rbCapRot.rotation = rotEuler;
+    rbCapRot.size = glm::vec3(0.7f, 3.0f, 0.0f);
+    rotDoc.rigidBodies.push_back(rbCapRot);
+
+    // Expected rotation matrix R in right-handed space
+    glm::vec3 rRH = PmxCamera::toRightHandedEuler(rotEuler);
+    glm::mat3 rotZ = glm::mat3(glm::rotate(glm::mat4(1.0f), rRH.z, glm::vec3(0.0f, 0.0f, 1.0f)));
+    glm::mat3 rotX = glm::mat3(glm::rotate(glm::mat4(1.0f), rRH.x, glm::vec3(1.0f, 0.0f, 0.0f)));
+    glm::mat3 rotY = glm::mat3(glm::rotate(glm::mat4(1.0f), rRH.y, glm::vec3(0.0f, 1.0f, 0.0f)));
+    glm::mat3 R = rotY * rotX * rotZ;
+
+    auto rotLines = PmxWireframeRenderer::buildRigidBodyWireframes(rotDoc, -1);
+    QCOMPARE(rotLines.size(), size_t(368));
+
+    // 1. Assert exact rotated sphere radius points p ± R*(r, 0, 0), p ± R*(0, r, 0), p ± R*(0, 0, r)
+    glm::vec3 pSphRot(1.0f, 2.0f, -3.0f);
+    float rRot = 1.5f;
+    glm::vec3 expPx = pSphRot + R * glm::vec3(rRot, 0.0f, 0.0f);
+    glm::vec3 expNx = pSphRot + R * glm::vec3(-rRot, 0.0f, 0.0f);
+    glm::vec3 expPy = pSphRot + R * glm::vec3(0.0f, rRot, 0.0f);
+    glm::vec3 expNy = pSphRot + R * glm::vec3(0.0f, -rRot, 0.0f);
+    glm::vec3 expPz = pSphRot + R * glm::vec3(0.0f, 0.0f, rRot);
+    glm::vec3 expNz = pSphRot + R * glm::vec3(0.0f, 0.0f, -rRot);
+
+    QVERIFY(glm::distance(rotLines[0].position, expPx) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[12].position, expPy) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[24].position, expNx) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[36].position, expNy) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[48 + 12].position, expPz) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[48 + 36].position, expNz) < 1e-4f);
+
+    // 2. Assert box corner vertices rotated by R
+    glm::vec3 pBoxRot(-2.0f, 4.0f, -1.0f);
+    float ex = 1.0f, ey = 2.0f, ez = 0.5f;
+    glm::vec3 cRot[8] = {
+        pBoxRot + R * glm::vec3(-ex, -ey, -ez),
+        pBoxRot + R * glm::vec3( ex, -ey, -ez),
+        pBoxRot + R * glm::vec3( ex,  ey, -ez),
+        pBoxRot + R * glm::vec3(-ex,  ey, -ez),
+        pBoxRot + R * glm::vec3(-ex, -ey,  ez),
+        pBoxRot + R * glm::vec3( ex, -ey,  ez),
+        pBoxRot + R * glm::vec3( ex,  ey,  ez),
+        pBoxRot + R * glm::vec3(-ex,  ey,  ez),
+    };
+
+    const size_t boxStart = 144;
+    // Edge (0,1)
+    QVERIFY(glm::distance(rotLines[boxStart + 0].position, cRot[0]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 1].position, cRot[1]) < 1e-4f);
+    // Edge (1,2)
+    QVERIFY(glm::distance(rotLines[boxStart + 2].position, cRot[1]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 3].position, cRot[2]) < 1e-4f);
+    // Edge (2,3)
+    QVERIFY(glm::distance(rotLines[boxStart + 4].position, cRot[2]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 5].position, cRot[3]) < 1e-4f);
+    // Edge (3,0)
+    QVERIFY(glm::distance(rotLines[boxStart + 6].position, cRot[3]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 7].position, cRot[0]) < 1e-4f);
+    // Edge (4,5)
+    QVERIFY(glm::distance(rotLines[boxStart + 8].position, cRot[4]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 9].position, cRot[5]) < 1e-4f);
+    // Edge (5,6)
+    QVERIFY(glm::distance(rotLines[boxStart + 10].position, cRot[5]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 11].position, cRot[6]) < 1e-4f);
+    // Edge (6,7)
+    QVERIFY(glm::distance(rotLines[boxStart + 12].position, cRot[6]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 13].position, cRot[7]) < 1e-4f);
+    // Edge (7,4)
+    QVERIFY(glm::distance(rotLines[boxStart + 14].position, cRot[7]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 15].position, cRot[4]) < 1e-4f);
+    // Vertical pillars (0,4), (1,5), (2,6), (3,7)
+    QVERIFY(glm::distance(rotLines[boxStart + 16].position, cRot[0]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 17].position, cRot[4]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 18].position, cRot[1]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 19].position, cRot[5]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 20].position, cRot[2]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 21].position, cRot[6]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 22].position, cRot[3]) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[boxStart + 23].position, cRot[7]) < 1e-4f);
+
+    // 3. Assert capsule dome apex points at ±(h/2 + r) rotated by R
+    glm::vec3 pCapRot(3.0f, 0.0f, 2.0f);
+    float rCap = 0.7f;
+    float hCap = 3.0f;
+    float hhCap = hCap * 0.5f;
+
+    glm::vec3 expTopApex = pCapRot + R * glm::vec3(0.0f, hhCap + rCap, 0.0f);
+    glm::vec3 expBotApex = pCapRot + R * glm::vec3(0.0f, -(hhCap + rCap), 0.0f);
+
+    const size_t capStart = 144 + 24;
+    // Each of the 12 arc iterations pushes 8 vertices: top XY (2), top ZY (2), bot XY (2), bot ZY (2).
+    // Segment s=6 (a0 = pi/2) top apex is at offset 104 + 6*8 = 152.
+    // Segment s=6 (a0 = pi/2) bot apex is at offset 104 + 6*8 + 4 = 156.
+    QVERIFY(glm::distance(rotLines[capStart + 152].position, expTopApex) < 1e-4f);
+    QVERIFY(glm::distance(rotLines[capStart + 156].position, expBotApex) < 1e-4f);
+}
+
+void tst_pmx_viewport::testJointWireframeCrossLimitArcsAndAnchors() {
+    PmxDocument doc;
+
+    PmxRigidBody rbA;
+    rbA.position = glm::vec3(0.0f, 0.0f, 2.0f);
+    doc.rigidBodies.push_back(rbA);
+
+    PmxRigidBody rbB;
+    rbB.position = glm::vec3(0.0f, 10.0f, 2.0f);
+    doc.rigidBodies.push_back(rbB);
+
+    PmxJoint joint;
+    joint.position = glm::vec3(0.0f, 5.0f, 2.0f);
+    // Non-zero Euler rotation on joint cross: pitch = 45 deg, yaw = 30 deg
+    joint.rotation = glm::vec3(glm::radians(45.0f), glm::radians(30.0f), 0.0f);
+    joint.rigidBodyIndexA = 0;
+    joint.rigidBodyIndexB = 1;
+    // Asymmetric angular limits (radians)
+    joint.angularLowerLimit = glm::vec3(0.0f, 0.1f, -0.3f);
+    joint.angularUpperLimit = glm::vec3(0.8f, 0.7f, 0.4f);
+    doc.joints.push_back(joint);
+
+    auto lines = PmxWireframeRenderer::buildJointWireframes(doc, -1);
+    // 3 axis lines * 2 = 6 vertices
+    // 3 limit arcs * 12 segs * 2 = 72 vertices
+    // 2 anchor lines * 2 = 4 vertices
+    // Total = 6 + 72 + 4 = 82 vertices
+    QCOMPARE(lines.size(), size_t(82));
+
+    for (const auto& v : lines) {
+        QVERIFY(std::isfinite(v.position.x));
+        QVERIFY(std::isfinite(v.position.y));
+        QVERIFY(std::isfinite(v.position.z));
+    }
+
+    // Axes: X = Red, Y = Green, Z = Blue
+    QCOMPARE(lines[0].color, glm::vec4(1.0f, 0.15f, 0.15f, 1.0f)); // X
+    QCOMPARE(lines[2].color, glm::vec4(0.15f, 0.9f, 0.15f, 1.0f)); // Y
+    QCOMPARE(lines[4].color, glm::vec4(0.2f, 0.4f, 1.0f, 1.0f));   // Z
+
+    // Compute expected rotation matrix R in right-handed space
+    glm::vec3 rRH = PmxCamera::toRightHandedEuler(joint.rotation);
+    glm::mat3 rotZ = glm::mat3(glm::rotate(glm::mat4(1.0f), rRH.z, glm::vec3(0.0f, 0.0f, 1.0f)));
+    glm::mat3 rotX = glm::mat3(glm::rotate(glm::mat4(1.0f), rRH.x, glm::vec3(1.0f, 0.0f, 0.0f)));
+    glm::mat3 rotY = glm::mat3(glm::rotate(glm::mat4(1.0f), rRH.y, glm::vec3(0.0f, 1.0f, 0.0f)));
+    glm::mat3 R = rotY * rotX * rotZ;
+
+    glm::vec3 p = PmxCamera::toRightHanded(joint.position);
+    QCOMPARE(p, glm::vec3(0.0f, 5.0f, -2.0f));
+
+    // Non-zero rotated coordinate cross endpoints
+    glm::vec3 expCrossX = p + R * glm::vec3(0.4f, 0.0f, 0.0f);
+    glm::vec3 expCrossY = p + R * glm::vec3(0.0f, 0.4f, 0.0f);
+    glm::vec3 expCrossZ = p + R * glm::vec3(0.0f, 0.0f, 0.4f);
+
+    QCOMPARE(lines[0].position, p);
+    QVERIFY(glm::distance(lines[1].position, expCrossX) < 1e-4f);
+    QCOMPARE(lines[2].position, p);
+    QVERIFY(glm::distance(lines[3].position, expCrossY) < 1e-4f);
+    QCOMPARE(lines[4].position, p);
+    QVERIFY(glm::distance(lines[5].position, expCrossZ) < 1e-4f);
+
+    // Verify asymmetric rotational limit arcs in RH space:
+    // MMD to RH: rx_RH = -rx_LH, ry_RH = -ry_LH, rz_RH = rz_LH
+    // minX = -upperX = -0.8f, maxX = -lowerX = 0.0f
+    // minY = -upperY = -0.7f, maxY = -lowerY = -0.1f
+    // minZ = lowerZ = -0.3f, maxZ = upperZ = 0.4f
+    const float rArc = 0.5f;
+
+    // X limit arc (YZ plane): s=0 (minX = -0.8f) and s=11 segment end (maxX = 0.0f)
+    glm::vec3 expXArcStart = p + R * glm::vec3(0.0f, rArc * std::cos(-0.8f), rArc * std::sin(-0.8f));
+    glm::vec3 expXArcEnd = p + R * glm::vec3(0.0f, rArc * std::cos(0.0f), rArc * std::sin(0.0f));
+    QVERIFY(glm::distance(lines[6].position, expXArcStart) < 1e-4f);
+    QVERIFY(glm::distance(lines[6 + 23].position, expXArcEnd) < 1e-4f);
+
+    // Y limit arc (ZX plane): s=0 (minY = -0.7f) and s=11 segment end (maxY = -0.1f)
+    glm::vec3 expYArcStart = p + R * glm::vec3(rArc * std::sin(-0.7f), 0.0f, rArc * std::cos(-0.7f));
+    glm::vec3 expYArcEnd = p + R * glm::vec3(rArc * std::sin(-0.1f), 0.0f, rArc * std::cos(-0.1f));
+    QVERIFY(glm::distance(lines[30].position, expYArcStart) < 1e-4f);
+    QVERIFY(glm::distance(lines[30 + 23].position, expYArcEnd) < 1e-4f);
+
+    // Z limit arc (XY plane): s=0 (minZ = -0.3f) and s=11 segment end (maxZ = 0.4f)
+    glm::vec3 expZArcStart = p + R * glm::vec3(rArc * std::cos(-0.3f), rArc * std::sin(-0.3f), 0.0f);
+    glm::vec3 expZArcEnd = p + R * glm::vec3(rArc * std::cos(0.4f), rArc * std::sin(0.4f), 0.0f);
+    QVERIFY(glm::distance(lines[54].position, expZArcStart) < 1e-4f);
+    QVERIFY(glm::distance(lines[54 + 23].position, expZArcEnd) < 1e-4f);
+
+    // Anchor line color: Magenta/Purple (0.85, 0.2, 0.85, 0.8)
+    const size_t anchorStart = 6 + 72;
+    QCOMPARE(lines[anchorStart].color, glm::vec4(0.85f, 0.2f, 0.85f, 0.8f));
+
+    // Selection highlight on joint
+    auto selectedLines = PmxWireframeRenderer::buildJointWireframes(doc, 0);
+    QCOMPARE(selectedLines.size(), size_t(82));
+    QCOMPARE(selectedLines[anchorStart].color, glm::vec4(1.0f, 0.4f, 1.0f, 1.0f));
+}
+
+void tst_pmx_viewport::testWireframeRendererRobustness() {
+    PmxDocument emptyDoc;
+    QVERIFY(PmxWireframeRenderer::buildBoneWireframes(emptyDoc).empty());
+    QVERIFY(PmxWireframeRenderer::buildRigidBodyWireframes(emptyDoc).empty());
+    QVERIFY(PmxWireframeRenderer::buildJointWireframes(emptyDoc).empty());
+
+    // Document with NaN/Inf values
+    PmxDocument badDoc;
+    PmxBone badBone;
+    badBone.position = glm::vec3(std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f);
+    badDoc.bones.push_back(badBone);
+
+    PmxRigidBody badRb;
+    badRb.position = glm::vec3(std::numeric_limits<float>::infinity(), 0.0f, 0.0f);
+    badDoc.rigidBodies.push_back(badRb);
+
+    PmxJoint badJoint;
+    badJoint.position = glm::vec3(0.0f, std::numeric_limits<float>::quiet_NaN(), 0.0f);
+    badJoint.rigidBodyIndexA = -99;
+    badJoint.rigidBodyIndexB = 99999;
+    badDoc.joints.push_back(badJoint);
+
+    // None of these should crash or emit non-finite vertices
+    auto boneLines = PmxWireframeRenderer::buildBoneWireframes(badDoc);
+    QVERIFY(boneLines.empty());
+
+    auto rbLines = PmxWireframeRenderer::buildRigidBodyWireframes(badDoc);
+    QVERIFY(rbLines.empty());
+
+    auto jointLines = PmxWireframeRenderer::buildJointWireframes(badDoc);
+    QVERIFY(jointLines.empty());
+
+    // Rigid body with negative size
+    PmxDocument negDoc;
+    PmxRigidBody negRb;
+    negRb.shape = 1; // Box
+    negRb.position = glm::vec3(0.0f);
+    negRb.rotation = glm::vec3(0.0f);
+    negRb.size = glm::vec3(-1.0f, -2.0f, -3.0f);
+    negDoc.rigidBodies.push_back(negRb);
+
+    auto negLines = PmxWireframeRenderer::buildRigidBodyWireframes(negDoc);
+    QCOMPARE(negLines.size(), size_t(24));
+    for (const auto& v : negLines) {
+        QVERIFY(std::isfinite(v.position.x));
+        QVERIFY(std::isfinite(v.position.y));
+        QVERIFY(std::isfinite(v.position.z));
+    }
+}
+
+void tst_pmx_viewport::testViewportWireframeToggles() {
+    PmxViewportItem viewport;
+    QCOMPARE(viewport.showRigidBodies(), true);
+    QCOMPARE(viewport.showJoints(), true);
+
+    QSignalSpy rbSpy(&viewport, &PmxViewportItem::showRigidBodiesChanged);
+    QSignalSpy jointSpy(&viewport, &PmxViewportItem::showJointsChanged);
+
+    viewport.setShowRigidBodies(false);
+    QCOMPARE(viewport.showRigidBodies(), false);
+    QCOMPARE(rbSpy.count(), 1);
+
+    // No-op set should not fire signal
+    viewport.setShowRigidBodies(false);
+    QCOMPARE(rbSpy.count(), 1);
+
+    viewport.setShowJoints(false);
+    QCOMPARE(viewport.showJoints(), false);
+    QCOMPARE(jointSpy.count(), 1);
+
+    viewport.setShowJoints(false);
+    QCOMPARE(jointSpy.count(), 1);
+
+    viewport.setShowRigidBodies(true);
+    viewport.setShowJoints(true);
+    QCOMPARE(viewport.showRigidBodies(), true);
+    QCOMPARE(viewport.showJoints(), true);
+    QCOMPARE(rbSpy.count(), 2);
+    QCOMPARE(jointSpy.count(), 2);
 }
 
 QTEST_MAIN(tst_pmx_viewport)
