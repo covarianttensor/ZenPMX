@@ -2694,7 +2694,47 @@ void TstPmxEvaluator::testAnimationKneeFlexionAndIkLegPoses() {
         linkThigh.hasAngleLimit = 0;
 
         legIk.ikLinks = {linkShin, linkThigh};
-        doc.bones = {thigh, shin, ankle, legIk};
+
+        // Semi-standard D-Bones inheriting rotation from thigh, shin, ankle
+        // thighD: index 4, deformTier 1, inherits from thigh (index 0)
+        PmxBone thighD;
+        thighD.nameJp = "左足D";
+        thighD.parentBoneIndex = -1;
+        thighD.position = {0.0f, 2.0f, 0.0f};
+        thighD.boneFlags = 0x0100; // InheritRotation
+        thighD.inheritParentIndex = 0;
+        thighD.inheritWeight = 1.0f;
+        thighD.deformTier = 1;
+
+        // shinD: index 5, deformTier 1, child of thighD (index 4), inherits from shin (index 1)
+        PmxBone shinD;
+        shinD.nameJp = "左ひざD";
+        shinD.parentBoneIndex = 4;
+        shinD.position = {0.0f, 1.0f, 0.0f};
+        shinD.boneFlags = 0x0100; // InheritRotation
+        shinD.inheritParentIndex = 1;
+        shinD.inheritWeight = 1.0f;
+        shinD.deformTier = 1;
+
+        // ankleD: index 6, deformTier 1, child of shinD (index 5), inherits from ankle (index 2)
+        PmxBone ankleD;
+        ankleD.nameJp = "左足首D";
+        ankleD.parentBoneIndex = 5;
+        ankleD.position = {0.0f, 0.0f, 0.0f};
+        ankleD.boneFlags = 0x0100; // InheritRotation
+        ankleD.inheritParentIndex = 2;
+        ankleD.inheritWeight = 1.0f;
+        ankleD.deformTier = 1;
+
+        // Add a vertex bound to shinD (BDEF1)
+        PmxVertex vert;
+        vert.position = {0.0f, 1.0f, 0.1f};
+        vert.weightType = WeightType::BDEF1;
+        vert.boneIndices = {5, 0, 0, 0};
+        vert.boneWeights = {1.0f, 0.0f, 0.0f, 0.0f};
+
+        doc.bones = {thigh, shin, ankle, legIk, thighD, shinD, ankleD};
+        doc.vertices = {vert};
 
         PmxRuntimeScene synthScene;
         synthScene.loadDocument(doc);
@@ -2714,6 +2754,20 @@ void TstPmxEvaluator::testAnimationKneeFlexionAndIkLegPoses() {
         glm::vec3 effectorPos = synthScene.worldPosition(2);
         glm::vec3 targetPos = synthScene.worldPosition(3);
         QVERIFY2(glm::distance(effectorPos, targetPos) < 1e-3f, "Synthetic ankle did not reach IK target");
+
+        // Verify D-Bones match raw IK bones in position
+        QVERIFY2(glm::distance(synthScene.worldPosition(4), synthScene.worldPosition(0)) < 0.01f,
+                 "Synthetic thighD head position does not match thigh");
+        QVERIFY2(glm::distance(synthScene.worldPosition(5), synthScene.worldPosition(1)) < 0.01f,
+                 "Synthetic shinD head position does not match shin");
+        QVERIFY2(glm::distance(synthScene.worldPosition(6), synthScene.worldPosition(2)) < 0.01f,
+                 "Synthetic ankleD head position does not match ankle");
+
+        // Verify deformed vertex bound to shinD has moved with the bent knee pose
+        glm::vec3 defPos = synthScene.deformedPosition(0);
+        glm::vec3 restPos = synthScene.runtimeVertex(0).restPosition;
+        float vertDisp = glm::distance(defPos, restPos);
+        QVERIFY2(vertDisp > 0.01f, "Synthetic vertex bound to shinD did not deform with bent knee");
     }
 
     // 2. Live Barbara.pmx + Motion 1.vmd test
@@ -2808,6 +2862,61 @@ void TstPmxEvaluator::testAnimationKneeFlexionAndIkLegPoses() {
             // Thigh bone must point mostly downwards (Y < -0.5), not flipped 90 degrees outward into the air
             QVERIFY2(thighDirL.y < -0.5f,
                      qPrintable(QString("Frame 39 ThighL flipped outward: dir.y = %1").arg(thighDirL.y)));
+
+            // D-Bones verification at Frame 39:
+            int dThighL = findBone(QString::fromUtf8("左足D"), QStringLiteral("足D.L"));
+            int dKneeL = findBone(QString::fromUtf8("左ひざD"), QStringLiteral("ひざD.L"));
+            int dAnkleL = findBone(QString::fromUtf8("左足首D"), QStringLiteral("足首D.L"));
+
+            QVERIFY2(dThighL >= 0, "Left thigh D-Bone not found in Barbara");
+            QVERIFY2(dKneeL >= 0, "Left knee D-Bone not found in Barbara");
+            QVERIFY2(dAnkleL >= 0, "Left ankle D-Bone not found in Barbara");
+
+            float distThighD = glm::distance(scene.worldPosition(dThighL), scene.worldPosition(thighL));
+            float distKneeD = glm::distance(scene.worldPosition(dKneeL), scene.worldPosition(kneeL));
+            float distAnkleD = glm::distance(scene.worldPosition(dAnkleL), scene.worldPosition(ankleL));
+
+            qDebug().noquote() << QStringLiteral("Frame 39 D-Bone distance to IK bone: Thigh: %1, Knee: %2, Ankle: %3")
+                                      .arg(distThighD).arg(distKneeD).arg(distAnkleD);
+
+            QVERIFY2(distThighD < 0.01f,
+                     qPrintable(QString("Frame 39 足D.L head position distance %1 >= 0.01").arg(distThighD)));
+            QVERIFY2(distKneeD < 0.01f,
+                     qPrintable(QString("Frame 39 ひざD.L head position distance %1 >= 0.01").arg(distKneeD)));
+            QVERIFY2(distAnkleD < 0.01f,
+                     qPrintable(QString("Frame 39 足首D.L head position distance %1 >= 0.01").arg(distAnkleD)));
+
+            // Verify deformed leg mesh vertices bound to ひざD.L have displaced along the bent knee pose
+            int kneeVertCount = 0;
+            float maxDisplacement = 0.0f;
+            for (size_t vi = 0; vi < pmxDoc.vertices.size(); ++vi) {
+                const auto& rv = scene.runtimeVertex(static_cast<int>(vi));
+                bool boundToKneeD = false;
+                if (rv.weightType == WeightType::BDEF1 && rv.boneIndices[0] == dKneeL) {
+                    boundToKneeD = true;
+                } else if ((rv.weightType == WeightType::BDEF2 || rv.weightType == WeightType::SDEF) &&
+                           ((rv.boneIndices[0] == dKneeL && rv.boneWeights[0] > 0.5f) ||
+                            (rv.boneIndices[1] == dKneeL && rv.boneWeights[1] > 0.5f))) {
+                    boundToKneeD = true;
+                } else if (rv.weightType == WeightType::BDEF4) {
+                    for (int k = 0; k < 4; ++k) {
+                        if (rv.boneIndices[k] == dKneeL && rv.boneWeights[k] > 0.5f) {
+                            boundToKneeD = true;
+                            break;
+                        }
+                    }
+                }
+                if (boundToKneeD) {
+                    kneeVertCount++;
+                    float disp = glm::distance(scene.deformedPosition(static_cast<int>(vi)), rv.restPosition);
+                    maxDisplacement = std::max(maxDisplacement, disp);
+                }
+            }
+            qDebug().noquote() << QStringLiteral("Frame 39 KneeD mesh vertices: count=%1, maxDisplacement=%2")
+                                      .arg(kneeVertCount).arg(maxDisplacement);
+            QVERIFY2(kneeVertCount > 0, "No vertices found bound to 左ひざD");
+            QVERIFY2(maxDisplacement > 0.1f,
+                     qPrintable(QString("Frame 39 KneeD mesh max displacement %1 <= 0.1 (mesh is frozen!)").arg(maxDisplacement)));
         } else if (std::abs(frame - 53.0f) < 1e-3f) {
             QVERIFY2(eulerKneeL.x > 0.2f, "Frame 53 Left Knee should flex forward");
             QVERIFY2(eulerKneeR.x > 0.35f, "Frame 53 Right Knee should flex forward");
@@ -2831,13 +2940,13 @@ void TstPmxEvaluator::testAnimationKneeFlexionAndIkLegPoses() {
         QVERIFY2(eulerKneeR.x >= 0.0f,
                  qPrintable(QString("Frame %1 Right knee hyperextended: %2").arg(frame).arg(eulerKneeR.x)));
 
-        // Knee 1-DOF hinge invariant: Y and Z angles must remain 0
-        QVERIFY2(std::abs(eulerKneeL.y) < 1e-3f && std::abs(eulerKneeL.z) < 1e-3f,
-                 qPrintable(QString("Frame %1 Left knee non-zero Y/Z: (%2, %3)")
-                                .arg(frame).arg(eulerKneeL.y).arg(eulerKneeL.z)));
-        QVERIFY2(std::abs(eulerKneeR.y) < 1e-3f && std::abs(eulerKneeR.z) < 1e-3f,
-                 qPrintable(QString("Frame %1 Right knee non-zero Y/Z: (%2, %3)")
-                                .arg(frame).arg(eulerKneeR.y).arg(eulerKneeR.z)));
+        // Knee 1-DOF hinge invariant: pure rotation around X axis (quaternion Y and Z components remain 0)
+        glm::quat qKneeL = scene.bone(kneeL).ikRotation;
+        glm::quat qKneeR = scene.bone(kneeR).ikRotation;
+        QVERIFY2(std::abs(qKneeL.y) < 1e-4f && std::abs(qKneeL.z) < 1e-4f,
+                 qPrintable(QString("Frame %1 Left knee quaternion non-zero Y/Z: (%2, %3)").arg(frame).arg(qKneeL.y).arg(qKneeL.z)));
+        QVERIFY2(std::abs(qKneeR.y) < 1e-4f && std::abs(qKneeR.z) < 1e-4f,
+                 qPrintable(QString("Frame %1 Right knee quaternion non-zero Y/Z: (%2, %3)").arg(frame).arg(qKneeR.y).arg(qKneeR.z)));
 
         glm::vec3 posThighL = scene.worldPosition(thighL);
         glm::vec3 posKneeL = scene.worldPosition(kneeL);

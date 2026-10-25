@@ -59,6 +59,7 @@ A **native Linux, Wayland-first C++20 / Qt 6.8+ (QML) PMX Editor** that provides
 * **Given** the user toggles the viewport from **Edit Mode** to **TransformView Mode**,
 * **When** the user rotates/translates bones, drags IK targets, adjusts Morph sliders, or loads a `.vmd` dance motion / `.vpd` pose with the `Bullet3` physics toggle enabled,
 * **Then** `PmxRuntimeScene` evaluates Deform Tiers (`変形階層`), CCDIK chains, Append/Grant inheritance (`付与`), SDEF/BDEF skinning, and 60 Hz `btDiscreteDynamicsWorld` rigid-body/spring-joint physics in real time **without mutating the rest-pose `PmxDocument`** (unless the user explicitly clicks *"Apply Current Pose to Rest Mesh"*).
+* **And Then** Append/Grant bones (including semi-standard `足D`, `ひざD`, `足首D` and `腰キャンセル`) MUST evaluate in deform tier order after their respective IK solvers and inherit the full solved IK rotation of their source bones, ensuring that meshes skinned to D-bones deform with 100% accuracy during `.vmd` motion playback.
 
 ### US-6: Built-In Native MMD Power Tools (The "Top 8" Community Workflows)
 * **Given** a user is rigging or finishing a model and invokes any of the 8 built-in C++ Power Tools from the `Tools` menu:

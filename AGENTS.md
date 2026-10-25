@@ -76,11 +76,21 @@
    * **Conversion Formulas (Computed strictly at the evaluation/rendering boundary):**
      * Position: $p_{RH} = (p_x, p_y, -p_z) \iff p_{LH} = (p_x, p_y, -p_z)$
      * Euler rotation ($YXZ$ intrinsic / $ZXY$ extrinsic): $r_{RH} = (-r_x, -r_y, r_z) \iff r_{LH} = (-r_x, -r_y, r_z)$
-     * Quaternion: $q_{RH} = (-q_x, -q_y, q_z, q_w) \iff (w, -x, -y, z)$
-     * Angular limits: $\min X_{RH} = -\max X_{LH}$, $\max X_{RH} = -\min X_{LH}$, $\min Y_{RH} = -\max Y_{LH}$, $\max Y_{RH} = -\min Y_{LH}$, $\min Z_{RH} = \min Z_{LH}$, $\max Z_{RH} = \max Z_{LH}$.
+     * Quaternion: Component mapping $(x', y', z', w') = (-x, -y, z, w) \iff$ GLM constructor `glm::quat(w, -x, -y, z)`.
+     * Angular limits: All three axes are negated and min/max swapped:
+       $$\min X_{RH} = -\max X_{LH}, \quad \max X_{RH} = -\min X_{LH}$$
+       $$\min Y_{RH} = -\max Y_{LH}, \quad \max Y_{RH} = -\min Y_{LH}$$
+       $$\min Z_{RH} = -\max Z_{LH}, \quad \max Z_{RH} = -\min Z_{LH}$$
    * **Zero Floating-Point Accumulation Drift:** Rest-pose geometry in `PmxDocument` stores native IEEE-754 floats. Never mutate rest-pose floats with lossy conversions.
 
-4. **Deterministic Test Verification Gate:**
+5. **Deform Tier Order & Append Bone (D-Bone) Invariant:**
+   * Bones must be evaluated in Deform Tier (`deformDepth` / 変形階層) order so IK solvers execute before dependent append bones at that tier.
+   * **Append Rotation (`0x0100`) MUST include `ikRotation`** when the source bone is an IK chain link:
+     $$R_{\text{src}} = \mathbf{q}_{\text{src,ik}} \cdot (\mathbf{q}_{\text{src,user}} \cdot \mathbf{q}_{\text{src,morph}})$$
+     For negative weights $w < 0$, blend via $\text{slerp}(I, \text{conjugate}(R_{\text{src}}), -w)$.
+   * **Semi-Standard D-Bones (`足D`, `ひざD`, `足首D`):** In standard MMD models, 100% of leg mesh vertices are weighted to D-Bones. D-Bones execute at `deformDepth = 1` and inherit from `足.L`, `ひざ.L`, `足首.L`. If Append bones do not receive `ikRotation`, leg mesh vertices remain frozen in the FK rest pose!
+
+6. **Deterministic Test Verification Gate:**
    * Every coding agent MUST run `ctest --test-dir build --output-on-failure` and ensure 100% test passage (exit code 0) under ASan/UBSan before reporting a task complete.
 
 ---

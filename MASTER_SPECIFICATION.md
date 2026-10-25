@@ -474,39 +474,104 @@ All 8 inspector tabs bind to `QAbstractTableModel` subclasses supporting:
 
 ## 5. MMD Runtime Evaluation, CCDIK, SDEF Skinning & Bullet3 Physics (`PmxEvaluator`)
 
-### 5.1 Coordinate System Handedness Conversion
+### 5.1 Coordinate System Handedness & Limit Conversions
 * **MMD / PMX Space:** **Left-Handed, Y-Up** ($+X$ Right (model's left), $+Y$ Up, $+Z$ Forward/Away from camera).
 * **OpenGL / Vulkan (`QRhi`) & Bullet3 Space:** **Right-Handed, Y-Up** ($+X$ Right, $+Y$ Up, $-Z$ Forward).
-* **Mandatory Conversion Rule at the `PmxEvaluator` / `Bullet3` Boundary:**
-  * Position conversion: $\mathbf{p}_{RH} = (p_x, p_y, -p_z)$.
-  * Euler rotation conversion ($YXZ$ intrinsic / $ZXY$ extrinsic MMD order): $\mathbf{r}_{RH} = (-r_x, -r_y, r_z)$.
-  * Quaternion conversion: $\mathbf{q}_{RH} = (-q_x, -q_y, q_z, q_w)$.
+* **Mandatory Conversion Rules at the Evaluation / Import Boundary:**
+  * **Position / Translation:** $\mathbf{p}_{RH} = (p_x, p_y, -p_z)$.
+  * **Euler Rotation ($YXZ$ intrinsic / $ZXY$ extrinsic MMD order):** $\mathbf{r}_{RH} = (-r_x, -r_y, r_z)$.
+  * **Quaternion:**
+    * Component mapping: $(x', y', z', w') = (-x, -y, z, w)$.
+    * GLM constructor order: `glm::quat(w, -x, -y, z)`.
+    * Matrix equivalence: $\mathbf{M}_{RH} = \mathbf{S}_z \mathbf{M}_{LH} \mathbf{S}_z$ where $\mathbf{S}_z = \text{diag}(1, 1, -1)$.
+  * **Angular Limits (IK Chain Links & 6DoF Spring Joints):**
+    * MMD stores limits in Left-Handed radians $(\min_{LH}, \max_{LH})$.
+    * In Right-Handed space, **all three axes are negated and min/max swapped**:
+      $$\min X_{RH} = -\max X_{LH}, \quad \max X_{RH} = -\min X_{LH}$$
+      $$\min Y_{RH} = -\max Y_{LH}, \quad \max Y_{RH} = -\min Y_{LH}$$
+      $$\min Z_{RH} = -\max Z_{LH}, \quad \max Z_{RH} = -\min Z_{LH}$$
 
-### 5.2 Exact MMD Bone Evaluation Order (`PmxRuntimeScene::evaluateFrame`)
-MMD does **not** evaluate bones in simple array order. `PmxRuntimeScene` MUST sort all bones into a deterministic evaluation schedule sorted by the tuple:
-$$\text{Key}(i) = \left(\text{isPhysicsAfterDeform}(i),\; \text{deformTier}(i),\; i\right)$$
-Each frame executes in 5 phases:
-1. **Morph Evaluation:** Reset morph accumulators; apply Group Morphs recursively, then accumulate Vertex, UV, Bone, and Material morph offsets weighted by `morphWeights[m]`.
-2. **Pre-Physics Bone Hierarchy Evaluation (`PhysicsAfterDeform == false`):**
-   * For each bone in sorted order:
-     * Compute local translation & rotation (Rest offset + VMD keyframe + Bone Morph offset + TransformView interactive gizmo offset).
-     * If `InheritRotation` (`0x0100`) or `InheritTranslation` (`0x0200`) is set: slerp/lerp the target `inheritParentIndex` bone's local delta by `inheritWeight`.
-     * Multiply by parent's world matrix to update `boneWorldMatrices[i]`.
-     * If `IK` (`0x0020`) is set: run **`MmdCcdIkSolver::solve(boneIndex)`** and propagate updated world transforms down the IK link chain.
-3. **Bullet3 Physics Step (`MmdPhysicsWorld::stepSimulation(dt)`):**
-   * For all Rigid Bodies with `physicsMode == FollowBone (0)`: compute kinematic world transform from linked bone and push into `btMotionState`.
-   * Step `btDiscreteDynamicsWorld::stepSimulation(dt, 10, 1.0f / 60.0f)` with gravity $(0, -98.0, 0)$ (MMD standard scale where $1\text{ unit} \approx 8\text{ cm}$).
-   * For all Rigid Bodies with `physicsMode == Physics (1)` or `PhysicsAndBone (2)`: read simulated rigid-body world transform and write back to the linked bone's world matrix (for `PhysicsAndBone`, preserve the bone's translation from the parent bone while applying only the physics rotation).
-4. **Post-Physics Bone Hierarchy Evaluation (`PhysicsAfterDeform == true`):**
-   * Evaluate remaining bones (such as hair/skirt child helper bones) using the same rules as Phase 2.
-5. **Vertex Skinning (`BDEF1` / `BDEF2` / `BDEF4` / `SDEF` / `QDEF`):**
-   * Compute skinning matrices $\mathbf{M}_b = \mathbf{W}_b \cdot \mathbf{B}_b^{-1}$ (where $\mathbf{B}_b^{-1}$ is the inverse bind matrix from rest-pose `bone.position`).
-   * **For `SDEF` vertices (Spherical Skinning — `Saba` / `babylon-mmd` specification):**
-     Given bones $b_0, b_1$, weights $w_0, w_1 = 1 - w_0$, and SDEF parameters $\mathbf{C}, \mathbf{R}_0, \mathbf{R}_1$:
-     $$\mathbf{q} = \text{slerp}(\mathbf{q}_{b_0}, \mathbf{q}_{b_1}, w_1), \quad \mathbf{R}_{\text{mat}} = \text{mat3}(\mathbf{q})$$
-     $$\mathbf{r}_0 = \mathbf{M}_{b_0} \mathbf{R}_0 - \mathbf{R}_{\text{mat}} \mathbf{R}_0, \quad \mathbf{r}_1 = \mathbf{M}_{b_1} \mathbf{R}_1 - \mathbf{R}_{\text{mat}} \mathbf{R}_1$$
-     $$\mathbf{p}_{\text{skinned}} = \mathbf{R}_{\text{mat}}(\mathbf{p} - \mathbf{C}) + w_0 \mathbf{r}_0 + w_1 \mathbf{r}_1 + w_0 (\mathbf{M}_{b_0}\mathbf{C}) + w_1 (\mathbf{M}_{b_1}\mathbf{C})$$
-     $$\mathbf{n}_{\text{skinned}} = \text{normalize}(\mathbf{R}_{\text{mat}} \mathbf{n})$$
+### 5.2 Exact MMD Frame Evaluation Lifecycle (`PmxRuntimeScene::evaluate`)
+MMD does **not** evaluate bones in simple array order. Each 60 Hz frame MUST execute across 5 sequential phases:
+
+```mermaid
+flowchart TD
+    P1["Phase 1: Morph Accumulation<br>(Vertex, UV, Bone, Material Morphs)"]
+    P2["Phase 2: Pre-Physics Bone Evaluation<br>(Deform Tiers for isPhysicsAfterDeform == false)"]
+    P3["Phase 3: Bullet3 Physics Simulation<br>(syncKinematic -> stepSimulation -> syncDynamic)"]
+    P4["Phase 4: Post-Physics Bone Evaluation<br>(Deform Tiers for isPhysicsAfterDeform == true)"]
+    P5["Phase 5: Vertex Skinning & Deformation<br>(BDEF1/2/4, SDEF, QDEF)"]
+    P1 --> P2 --> P3 --> P4 --> P5
+```
+
+#### Phase 1: Morph Accumulation
+* Reset all morph accumulators to zero / default state.
+* Recursively unpack Group Morphs (`morphType == 0`) with cycle protection to determine effective weights for leaf morphs.
+* Accumulate Vertex Morphs ($\mathbf{p} += \mathbf{p}_{\text{offset}} \cdot w$), UV Morphs, Bone Morphs ($\mathbf{t}_{\text{morph}} += \mathbf{t}_{\text{offset}} \cdot w, \mathbf{q}_{\text{morph}} = \text{slerp}(I, \mathbf{q}_{\text{offset}}, w) \cdot \mathbf{q}_{\text{morph}}$), and 28-channel Material Morphs (Multiply pass followed by Add pass).
+
+#### Phase 2 & Phase 4: Bone Hierarchy & Deform Tier Pass (`UpdateNodeAnimation`)
+MMD separates bones into Pre-Physics (`isPhysicsAfterDeform == false`) and Post-Physics (`isPhysicsAfterDeform == true`). Within each group, bones are evaluated according to **Deform Tier (`deformDepth` / 変形階層)** across 4 passes:
+
+1. **Pass 1 (Local Transforms):**
+   For all bones in the active group:
+   $$\mathbf{t}_{\text{base}} = \mathbf{t}_{\text{rest}} + \mathbf{t}_{\text{vmd}} + \mathbf{t}_{\text{morph}}, \quad \mathbf{q}_{\text{base}} = \mathbf{q}_{\text{vmd}} \cdot \mathbf{q}_{\text{morph}}$$
+   $$\mathbf{M}_{\text{local}} = \text{translate}(\mathbf{t}_{\text{base}}) \cdot \text{mat4}(\mathbf{q}_{\text{base}})$$
+2. **Pass 2 (Hierarchy Propagation):**
+   For all root bones (`parentIndex < 0`): recursively propagate world transforms down the parent-child tree:
+   $$\mathbf{M}_{\text{world, child}} = \mathbf{M}_{\text{world, parent}} \cdot \text{translate}(\mathbf{p}_{\text{rest, child}} - \mathbf{p}_{\text{rest, parent}}) \cdot \mathbf{M}_{\text{local, child}}$$
+3. **Pass 3 (Interleaved Deform Tier Pass — The Critical Invariant):**
+   Iterate through bones sorted by `deformDepth` (and array index for ties):
+   * **IK Solvers:** If the bone is an IK root (e.g. `足ＩＫ.L` at `deformDepth = 1`, flag `0x0020`), execute `MmdCcdIkSolver::solveChain`.
+     * Solves each link in the chain (e.g., knee `ひざ.L`, thigh `足.L`), computing `ikRotation`.
+     * Immediately update local matrices and propagate world matrices down each link's child subtree.
+   * **Append Bones (Grant Transforms / 付与親):** If the bone has `InheritRotation` (`0x0100`) or `InheritTranslation` (`0x0200`):
+     * Fetch the source bone `inheritParentIndex`.
+     * **MANDATORY IK PROPAGATION INVARIANT:** If the source bone is an IK link or has IK rotation, the inherited rotation MUST include `ikRotation`:
+       $$R_{\text{src}} = \mathbf{q}_{\text{src,ik}} \cdot (\mathbf{q}_{\text{src,vmd}} \cdot \mathbf{q}_{\text{src,morph}})$$
+       $$T_{\text{src}} = \mathbf{t}_{\text{src,vmd}} + \mathbf{t}_{\text{src,morph}}$$
+     * Blend by `inheritWeight` $w$:
+       $$\mathbf{q}_{\text{append}} = \begin{cases} \text{slerp}(I, R_{\text{src}}, w) & \text{if } w \ge 0 \\ \text{slerp}(I, \text{conjugate}(R_{\text{src}}), -w) & \text{if } w < 0 \end{cases}$$
+       $$\mathbf{t}_{\text{append}} = T_{\text{src}} \cdot w$$
+     * Apply to the append bone's local transform:
+       $$\mathbf{M}_{\text{local}} = \text{translate}(\mathbf{t}_{\text{base}} + \mathbf{t}_{\text{append}}) \cdot \text{mat4}(\mathbf{q}_{\text{ik}} \cdot \mathbf{q}_{\text{base}} \cdot \mathbf{q}_{\text{append}})$$
+     * Immediately update the append bone's world matrix and propagate down its child subtree.
+4. **Pass 4 (Final Hierarchy Synchronization):**
+   Re-synchronize all root bone hierarchies to ensure complete downstream consistency.
+
+#### Phase 3: Bullet3 Physics Simulation (`MmdPhysicsWorld::stepSimulation`)
+* For all Rigid Bodies with `physicsMode == FollowBone (0)`: sync kinematic world transforms from linked bone matrices.
+* If `deltaTime > 0.0f`: step `btDiscreteDynamicsWorld::stepSimulation(deltaTime)` and sync Dynamic (`1`) and PhysicsAndBone (`2`) bodies back to their linked bones.
+* If `deltaTime == 0.0f` (timeline scrub / static pose): execute `resetToBoneTransforms(scene)` to align dynamic bodies to current bone coordinates, preventing stale rest-pose snapping.
+
+#### Phase 5: Vertex Skinning & Deformation
+* Compute final skinning matrix for each bone: $\mathbf{M}_b = \mathbf{W}_b \cdot \mathbf{B}_b^{-1}$ (where $\mathbf{B}_b^{-1} = \text{translate}(-\mathbf{p}_{\text{rest, b}})$).
+* **For `BDEF1` / `BDEF2` / `BDEF4`:** Standard linear blend skinning $\mathbf{p}' = \sum w_i \mathbf{M}_{b_i} (\mathbf{p} + \mathbf{p}_{\text{morph}})$.
+* **For `SDEF` (Spherical Skinning — Saba / babylon-mmd specification):**
+  Given bones $b_0, b_1$, weights $w_0, w_1 = 1 - w_0$, and SDEF parameters $\mathbf{C}, \mathbf{R}_0, \mathbf{R}_1$:
+  $$\mathbf{q} = \text{slerp}(\mathbf{q}_{b_0}, \mathbf{q}_{b_1}, w_1), \quad \mathbf{R}_{\text{mat}} = \text{mat3}(\mathbf{q})$$
+  $$\mathbf{r}_0 = \mathbf{M}_{b_0} \mathbf{R}_0 - \mathbf{R}_{\text{mat}} \mathbf{R}_0, \quad \mathbf{r}_1 = \mathbf{M}_{b_1} \mathbf{R}_1 - \mathbf{R}_{\text{mat}} \mathbf{R}_1$$
+  $$\mathbf{p}_{\text{skinned}} = \mathbf{R}_{\text{mat}}(\mathbf{p} + \mathbf{p}_{\text{morph}} - \mathbf{C}) + w_0 \mathbf{r}_0 + w_1 \mathbf{r}_1 + w_0 (\mathbf{M}_{b_0}\mathbf{C}) + w_1 (\mathbf{M}_{b_1}\mathbf{C})$$
+  $$\mathbf{n}_{\text{skinned}} = \text{normalize}(\mathbf{R}_{\text{mat}} \mathbf{n})$$
+
+### 5.3 Semi-Standard D-Bone (`足D`, `ひざD`, `足首D`) Rigging Architecture
+In standard production MMD models (including Barbara, Genshin, and Tda models):
+1. **Mesh Skinning Targets D-Bones Exclusively:**
+   Vertices in the legs are **not** weighted to the IK chain bones (`足.L`, `ひざ.L`, `足首.L`). Instead, 100% of the leg vertices are bound to `足D.L`, `ひざD.L`, and `足首D.L`.
+2. **D-Bones Are Append Bones, Not Children:**
+   The parent of `足D.L` is `腰キャンセル.L`. `足D.L` has flag `InheritRotation` (`0x0100`, weight `1.0`) pointing to `足.L`.
+3. **Execution Order Requirement:**
+   `足D.L` has `deformDepth = 1`, placed in bone order **after** `足ＩＫ.L`. When `足ＩＫ.L` solves, `足.L` and `ひざ.L` receive `ikRotation`. Subsequently, `足D.L` and `ひざD.L` execute in Pass 3 and copy `ikRotation` into their transforms. If an engine evaluates append bones before IK or ignores `ikRotation`, the mesh legs remain frozen in the FK pose while only the invisible IK bones move.
+
+### 5.4 CCD-IK Hinge Plane Solver (`SolvePlane`)
+For single-axis hinge links (such as knee `ひざ.L` / `ひざ.R` where only X rotation is non-zero):
+1. Transform effector position $\mathbf{p}_e$ and IK target position $\mathbf{p}_t$ into link local coordinates:
+   $$\mathbf{v}_e = \text{normalize}(\mathbf{M}_{\text{link}}^{-1} \mathbf{p}_e), \quad \mathbf{v}_t = \text{normalize}(\mathbf{M}_{\text{link}}^{-1} \mathbf{p}_t)$$
+2. Compute unsigned rotation angle $\theta = \arccos(\text{clamp}(\mathbf{v}_e \cdot \mathbf{v}_t, -1, 1))$ clamped by `chain.limitAngle`.
+3. Test $+ \theta$ and $-\theta$ around the hinge axis $\hat{\mathbf{a}} = (1, 0, 0)$: choose the signed step $\Delta \theta = \pm \theta$ that maximizes $(\text{rot}(\Delta \theta, \hat{\mathbf{a}}) \mathbf{v}_e) \cdot \mathbf{v}_t$.
+4. **Iteration-0 Sign Flip:** If $\theta_{\text{new}} = \theta_{\text{plane}} + \Delta \theta$ violates the limits $[\min X_{RH}, \max X_{RH}]$, but $-\theta_{\text{new}}$ lies within the limits, invert the sign: $\theta_{\text{new}} = -\theta_{\text{new}}$.
+5. Clamp $\theta_{\text{new}} = \text{clamp}(\theta_{\text{new}}, \min X_{RH}, \max X_{RH})$ and update:
+   $$\mathbf{q}_{\text{ik}} = \text{angleAxis}(\theta_{\text{new}}, \hat{\mathbf{a}}) \cdot \text{inverse}(\mathbf{q}_{\text{vmd}})$$
+
 
 ---
 

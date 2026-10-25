@@ -72,6 +72,7 @@ public:
     void evaluateBones();
     void evaluatePrePhysicsBones();
     void evaluatePostPhysicsBones();
+    void evaluateNodeGroup(bool afterPhysics);
     void deformVertices();
 
     // Physics Engine Controls & Accessors
@@ -163,6 +164,8 @@ public:
 
 private:
     void evaluateSingleBone(int32_t idx);
+    void updateBoneLocalTransform(int32_t idx);
+    void propagateWorldTransform(int32_t boneIndex, bool afterPhysics, int depth = 0);
 
     std::vector<RuntimeBone> m_bones;
     std::vector<glm::mat4> m_inverseBindMatrices;

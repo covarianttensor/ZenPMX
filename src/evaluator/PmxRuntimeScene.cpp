@@ -83,8 +83,8 @@ void PmxRuntimeScene::loadDocument(const PmxDocument& doc) {
                     link.maxAngle.x = -std::min(srcLink.limitMin.x, srcLink.limitMax.x);
                     link.minAngle.y = -std::max(srcLink.limitMin.y, srcLink.limitMax.y);
                     link.maxAngle.y = -std::min(srcLink.limitMin.y, srcLink.limitMax.y);
-                    link.minAngle.z = std::min(srcLink.limitMin.z, srcLink.limitMax.z);
-                    link.maxAngle.z = std::max(srcLink.limitMin.z, srcLink.limitMax.z);
+                    link.minAngle.z = -std::max(srcLink.limitMin.z, srcLink.limitMax.z);
+                    link.maxAngle.z = -std::min(srcLink.limitMin.z, srcLink.limitMax.z);
                 }
                 chain.links.push_back(link);
             }
@@ -149,15 +149,14 @@ void PmxRuntimeScene::loadDocument(const PmxDocument& doc) {
 
     // Evaluate pre-physics rest pose
     evaluateMorphs();
-    evaluatePrePhysicsBones();
-    solveIk();
+    evaluateNodeGroup(false);
 
     // Initialize physics engine
     m_physicsEngine = std::make_unique<PmxPhysicsEngine>();
     m_physicsEngine->init(doc, *this);
 
-    evaluateBones();
-    solveIk();
+    evaluateNodeGroup(false);
+    evaluateNodeGroup(true);
     resetPhysicsToBones();
 
     evaluate(0.0f);
@@ -165,8 +164,7 @@ void PmxRuntimeScene::loadDocument(const PmxDocument& doc) {
 
 void PmxRuntimeScene::evaluate(float deltaTime) {
     evaluateMorphs();
-    evaluatePrePhysicsBones();
-    solveIk();
+    evaluateNodeGroup(false);
     if (m_physicsEnabled && m_physicsEngine) {
         m_physicsEngine->syncKinematicBodies(*this);
         if (deltaTime > 0.0f) {
@@ -178,7 +176,7 @@ void PmxRuntimeScene::evaluate(float deltaTime) {
             m_physicsEngine->resetToBoneTransforms(*this);
         }
     }
-    evaluatePostPhysicsBones();
+    evaluateNodeGroup(true);
     deformVertices();
 }
 
@@ -356,58 +354,31 @@ void PmxRuntimeScene::evaluateMorphs() {
 }
 
 void PmxRuntimeScene::evaluateBones() {
-    evaluatePrePhysicsBones();
-    evaluatePostPhysicsBones();
+    evaluateNodeGroup(false);
+    evaluateNodeGroup(true);
 }
 
 void PmxRuntimeScene::evaluatePrePhysicsBones() {
-    for (int32_t idx : m_evaluationOrder) {
-        if ((m_bones[static_cast<size_t>(idx)].boneFlags & 0x1000) == 0) {
-            evaluateSingleBone(idx);
-        }
-    }
+    evaluateNodeGroup(false);
 }
 
 void PmxRuntimeScene::evaluatePostPhysicsBones() {
-    for (int32_t idx : m_evaluationOrder) {
-        if ((m_bones[static_cast<size_t>(idx)].boneFlags & 0x1000) != 0) {
-            evaluateSingleBone(idx);
-        }
-    }
+    evaluateNodeGroup(true);
 }
 
-void PmxRuntimeScene::evaluateSingleBone(int32_t idx) {
+void PmxRuntimeScene::updateBoneLocalTransform(int32_t idx) {
     if (idx < 0 || idx >= static_cast<int32_t>(m_bones.size())) {
         return;
     }
     auto& bone = m_bones[static_cast<size_t>(idx)];
-
-    // Append Bone Inheritance (付与)
-    if ((bone.boneFlags & 0x0100) && bone.inheritParentIndex >= 0 &&
-        bone.inheritParentIndex < static_cast<int32_t>(m_bones.size())) {
-        const auto& src = m_bones[static_cast<size_t>(bone.inheritParentIndex)];
-        glm::quat parentRot = src.userRotation * src.morphRotation;
-        if (glm::dot(parentRot, parentRot) > 1e-8f) {
-            parentRot = glm::normalize(parentRot);
-        } else {
-            parentRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-        }
-        bone.appendRotation = glm::slerp(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), parentRot, bone.inheritWeight);
-    } else {
-        bone.appendRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-    }
-
-    if ((bone.boneFlags & 0x0200) && bone.inheritParentIndex >= 0 &&
-        bone.inheritParentIndex < static_cast<int32_t>(m_bones.size())) {
-        const auto& src = m_bones[static_cast<size_t>(bone.inheritParentIndex)];
-        bone.appendTranslation = (src.userTranslation + src.morphTranslation) * bone.inheritWeight;
-    } else {
-        bone.appendTranslation = glm::vec3(0.0f);
-    }
-
-    // Local translation & rotation
     glm::vec3 t = bone.userTranslation + bone.morphTranslation + bone.appendTranslation;
-    glm::quat q = bone.userRotation * bone.morphRotation * bone.appendRotation * bone.ikRotation;
+    glm::quat q_base = bone.userRotation * bone.morphRotation;
+    if (glm::dot(q_base, q_base) > 1e-8f) {
+        q_base = glm::normalize(q_base);
+    } else {
+        q_base = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    }
+    glm::quat q = bone.ikRotation * q_base * bone.appendRotation;
     if (glm::dot(q, q) > 1e-8f) {
         q = glm::normalize(q);
     } else {
@@ -427,10 +398,14 @@ void PmxRuntimeScene::evaluateSingleBone(int32_t idx) {
         }
     }
 
-    // Local transform matrix
     bone.localMatrix = glm::translate(glm::mat4(1.0f), t) * glm::mat4_cast(q);
+}
 
-    // World transform matrix
+void PmxRuntimeScene::propagateWorldTransform(int32_t boneIndex, bool afterPhysics, int depth) {
+    if (depth > 256 || boneIndex < 0 || boneIndex >= static_cast<int32_t>(m_bones.size())) {
+        return;
+    }
+    auto& bone = m_bones[static_cast<size_t>(boneIndex)];
     if (bone.parentIndex < 0 || bone.parentIndex >= static_cast<int32_t>(m_bones.size()) || bone.parentIndex == bone.index) {
         bone.worldMatrix = glm::translate(glm::mat4(1.0f), bone.restPosition) * bone.localMatrix;
     } else {
@@ -438,9 +413,117 @@ void PmxRuntimeScene::evaluateSingleBone(int32_t idx) {
         glm::vec3 deltaRest = bone.restPosition - parent.restPosition;
         bone.worldMatrix = parent.worldMatrix * glm::translate(glm::mat4(1.0f), deltaRest) * bone.localMatrix;
     }
+    bone.skinningMatrix = bone.worldMatrix * m_inverseBindMatrices[static_cast<size_t>(boneIndex)];
 
-    // Skinning matrix
-    bone.skinningMatrix = bone.worldMatrix * m_inverseBindMatrices[static_cast<size_t>(idx)];
+    if (static_cast<size_t>(boneIndex) < m_children.size()) {
+        for (int32_t childIndex : m_children[static_cast<size_t>(boneIndex)]) {
+            bool childAfter = (m_bones[static_cast<size_t>(childIndex)].boneFlags & 0x1000) != 0;
+            if (childAfter == afterPhysics) {
+                propagateWorldTransform(childIndex, afterPhysics, depth + 1);
+            }
+        }
+    }
+}
+
+void PmxRuntimeScene::evaluateSingleBone(int32_t idx) {
+    updateSubtree(idx);
+}
+
+void PmxRuntimeScene::evaluateNodeGroup(bool afterPhysics) {
+    // Pass 1 (Local Base Transforms):
+    for (int32_t idx : m_evaluationOrder) {
+        auto& bone = m_bones[static_cast<size_t>(idx)];
+        bool boneAfterPhysics = (bone.boneFlags & 0x1000) != 0;
+        if (boneAfterPhysics != afterPhysics) {
+            continue;
+        }
+
+        bone.appendTranslation = glm::vec3(0.0f);
+        bone.appendRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        bone.ikRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        updateBoneLocalTransform(idx);
+    }
+
+    // Pass 2 (Root Hierarchy Propagation):
+    for (int32_t idx : m_evaluationOrder) {
+        const auto& bone = m_bones[static_cast<size_t>(idx)];
+        bool boneAfterPhysics = (bone.boneFlags & 0x1000) != 0;
+        if (boneAfterPhysics != afterPhysics) {
+            continue;
+        }
+        bool isRootInGroup = (bone.parentIndex < 0 ||
+                              bone.parentIndex >= static_cast<int32_t>(m_bones.size()) ||
+                              bone.parentIndex == bone.index ||
+                              ((m_bones[static_cast<size_t>(bone.parentIndex)].boneFlags & 0x1000) != (bone.boneFlags & 0x1000)));
+        if (isRootInGroup) {
+            propagateWorldTransform(idx, afterPhysics);
+        }
+    }
+
+    // Pass 3 (Interleaved Deform Tier Loop):
+    for (int32_t idx : m_evaluationOrder) {
+        auto& bone = m_bones[static_cast<size_t>(idx)];
+        bool boneAfterPhysics = (bone.boneFlags & 0x1000) != 0;
+        if (boneAfterPhysics != afterPhysics) {
+            continue;
+        }
+
+        // If bone has an enabled IK chain (bone is chain.ikBoneIndex):
+        for (const auto& chain : m_ikChains) {
+            if (chain.ikBoneIndex == idx && chain.enabled) {
+                MmdCcdIkSolver::solveChain(*this, chain);
+            }
+        }
+
+        // If bone has Append Rotation (0x0100) or Append Translation (0x0200):
+        if (((bone.boneFlags & 0x0100) || (bone.boneFlags & 0x0200)) &&
+            bone.inheritParentIndex >= 0 && bone.inheritParentIndex < static_cast<int32_t>(m_bones.size())) {
+            const auto& src = m_bones[static_cast<size_t>(bone.inheritParentIndex)];
+
+            glm::quat appendQ(1.0f, 0.0f, 0.0f, 0.0f);
+            if (bone.boneFlags & 0x0100) {
+                glm::quat q_srcBase = src.userRotation * src.morphRotation;
+                if (glm::dot(q_srcBase, q_srcBase) > 1e-8f) {
+                    q_srcBase = glm::normalize(q_srcBase);
+                } else {
+                    q_srcBase = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+                }
+                glm::quat R_src = glm::normalize(src.ikRotation * q_srcBase);
+                if (bone.inheritWeight >= 0.0f) {
+                    appendQ = glm::slerp(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), R_src, bone.inheritWeight);
+                } else {
+                    appendQ = glm::slerp(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::conjugate(R_src), -bone.inheritWeight);
+                }
+            }
+
+            glm::vec3 appendT(0.0f);
+            if (bone.boneFlags & 0x0200) {
+                glm::vec3 T_src = src.userTranslation + src.morphTranslation;
+                appendT = T_src * bone.inheritWeight;
+            }
+
+            bone.appendRotation = appendQ;
+            bone.appendTranslation = appendT;
+
+            updateSubtree(idx);
+        }
+    }
+
+    // Pass 4 (Final Hierarchy Synchronization):
+    for (int32_t idx : m_evaluationOrder) {
+        const auto& bone = m_bones[static_cast<size_t>(idx)];
+        bool boneAfterPhysics = (bone.boneFlags & 0x1000) != 0;
+        if (boneAfterPhysics != afterPhysics) {
+            continue;
+        }
+        bool isRootInGroup = (bone.parentIndex < 0 ||
+                              bone.parentIndex >= static_cast<int32_t>(m_bones.size()) ||
+                              bone.parentIndex == bone.index ||
+                              ((m_bones[static_cast<size_t>(bone.parentIndex)].boneFlags & 0x1000) != (bone.boneFlags & 0x1000)));
+        if (isRootInGroup) {
+            propagateWorldTransform(idx, afterPhysics);
+        }
+    }
 }
 
 void PmxRuntimeScene::setBoneTransform(int boneIndex, const glm::vec3& translation, const glm::quat& rotation) {
@@ -471,7 +554,6 @@ void PmxRuntimeScene::resetTransforms() {
 
 void PmxRuntimeScene::resetPhysics() {
     evaluateBones();
-    solveIk();
     resetPhysicsToBones();
 }
 
@@ -690,7 +772,17 @@ void PmxRuntimeScene::updateSubtree(int32_t boneIndex, int depth) {
     if (depth > 256 || boneIndex < 0 || boneIndex >= static_cast<int32_t>(m_bones.size())) {
         return;
     }
-    evaluateSingleBone(boneIndex);
+    updateBoneLocalTransform(boneIndex);
+    auto& bone = m_bones[static_cast<size_t>(boneIndex)];
+    if (bone.parentIndex < 0 || bone.parentIndex >= static_cast<int32_t>(m_bones.size()) || bone.parentIndex == bone.index) {
+        bone.worldMatrix = glm::translate(glm::mat4(1.0f), bone.restPosition) * bone.localMatrix;
+    } else {
+        const auto& parent = m_bones[static_cast<size_t>(bone.parentIndex)];
+        glm::vec3 deltaRest = bone.restPosition - parent.restPosition;
+        bone.worldMatrix = parent.worldMatrix * glm::translate(glm::mat4(1.0f), deltaRest) * bone.localMatrix;
+    }
+    bone.skinningMatrix = bone.worldMatrix * m_inverseBindMatrices[static_cast<size_t>(boneIndex)];
+
     if (m_children.size() != m_bones.size()) {
         rebuildChildrenHierarchy();
     }
