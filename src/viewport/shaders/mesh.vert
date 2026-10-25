@@ -28,10 +28,13 @@ layout(std140, binding = 0) uniform FrameAndMaterialUbo {
 
 layout(location = 0) out vec3 vNormal;
 layout(location = 1) out vec2 vUV;
-layout(location = 2) out vec3 vViewPos;
+layout(location = 2) out vec2 vSphereUV;
+layout(location = 3) out vec3 vViewPos;
 
 void main() {
-    vNormal = mat3(u_normalMatrix) * inNormal;
+    vec3 normView = normalize(mat3(u_normalMatrix) * inNormal);
+    vSphereUV = vec2(0.5 + 0.5 * normView.x, 0.5 - 0.5 * normView.y);
+    vNormal = normView;
     vUV = inUV;
     vec4 viewPos = u_modelView * vec4(inPosition, 1.0);
     vViewPos = viewPos.xyz;

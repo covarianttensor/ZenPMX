@@ -1,8 +1,11 @@
 #include "viewport/PmxViewportItem.h"
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
 #include <QDebug>
 #include <QMatrix4x4>
 #include <cstring>
+#include <algorithm>
 
 inline void initShaders() {
     Q_INIT_RESOURCE(pmx_shaders);
@@ -24,37 +27,59 @@ static QShader loadShaderFromResource(const QString& name) {
 // PmxRhiRenderer
 // -----------------------------------------------------------------------------
 
-PmxRhiRenderer::PmxRhiRenderer() = default;
+PmxRhiRenderer::PmxRhiRenderer()
+    : m_meshDataDirty(true)
+    , m_materialsDirty(true)
+{
+}
 
 PmxRhiRenderer::~PmxRhiRenderer() {
-    delete m_meshUbo;
+    for (auto& gb : m_gpuBatches) {
+        delete gb.srb;
+        delete gb.ubo;
+    }
+    m_gpuBatches.clear();
+
+    delete m_dummyLayoutUbo;
+    delete m_dummyLayoutSrb;
     delete m_lineUbo;
-    delete m_meshSrb;
     delete m_lineSrb;
-    delete m_meshPipeline;
+    delete m_meshPipelineCullNone;
+    delete m_meshPipelineCullBack;
     delete m_linePipeline;
     delete m_meshVertexBuffer;
     delete m_meshIndexBuffer;
     delete m_gridVertexBuffer;
     delete m_boneVertexBuffer;
+
+    m_textureCache.clear();
 }
 
 void PmxRhiRenderer::initialize(QRhiCommandBuffer* cb) {
-    if (!m_meshUbo) {
-        m_meshUbo = rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(FrameAndMaterialUboData));
-        m_meshUbo->create();
+    QRhiResourceUpdateBatch* u = rhi()->nextResourceUpdateBatch();
+
+    if (!m_dummyLayoutUbo) {
+        m_dummyLayoutUbo = rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(FrameAndMaterialUboData));
+        m_dummyLayoutUbo->create();
     }
     if (!m_lineUbo) {
         m_lineUbo = rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(LineUboData));
         m_lineUbo->create();
     }
 
-    if (!m_meshSrb) {
-        m_meshSrb = rhi()->newShaderResourceBindings();
-        m_meshSrb->setBindings({
-            QRhiShaderResourceBinding::uniformBuffer(0, QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage, m_meshUbo)
+    QRhiTexture* dummyWhiteTex = m_textureCache.defaultWhiteTexture(rhi(), u);
+    QRhiSampler* repSampler = m_textureCache.repeatSampler(rhi());
+    QRhiSampler* clmpSampler = m_textureCache.clampSampler(rhi());
+
+    if (!m_dummyLayoutSrb) {
+        m_dummyLayoutSrb = rhi()->newShaderResourceBindings();
+        m_dummyLayoutSrb->setBindings({
+            QRhiShaderResourceBinding::uniformBuffer(0, QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage, m_dummyLayoutUbo),
+            QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, dummyWhiteTex, repSampler),
+            QRhiShaderResourceBinding::sampledTexture(2, QRhiShaderResourceBinding::FragmentStage, dummyWhiteTex, clmpSampler),
+            QRhiShaderResourceBinding::sampledTexture(3, QRhiShaderResourceBinding::FragmentStage, dummyWhiteTex, clmpSampler)
         });
-        m_meshSrb->create();
+        m_dummyLayoutSrb->create();
     }
 
     if (!m_lineSrb) {
@@ -70,9 +95,9 @@ void PmxRhiRenderer::initialize(QRhiCommandBuffer* cb) {
     QShader linesVs = loadShaderFromResource(QStringLiteral(":/shaders/lines.vert.qsb"));
     QShader linesFs = loadShaderFromResource(QStringLiteral(":/shaders/lines.frag.qsb"));
 
-    if (!m_meshPipeline) {
-        m_meshPipeline = rhi()->newGraphicsPipeline();
-        m_meshPipeline->setShaderStages({
+    auto createMeshPipeline = [&](QRhiGraphicsPipeline::CullMode cullMode) -> QRhiGraphicsPipeline* {
+        auto* pipe = rhi()->newGraphicsPipeline();
+        pipe->setShaderStages({
             { QRhiShaderStage::Vertex, meshVs },
             { QRhiShaderStage::Fragment, meshFs }
         });
@@ -85,15 +110,24 @@ void PmxRhiRenderer::initialize(QRhiCommandBuffer* cb) {
             { 0, 1, QRhiVertexInputAttribute::Float3, offsetof(MeshVertex, normal) },
             { 0, 2, QRhiVertexInputAttribute::Float2, offsetof(MeshVertex, uv) }
         });
-        m_meshPipeline->setVertexInputLayout(inputLayout);
-        m_meshPipeline->setShaderResourceBindings(m_meshSrb);
-        m_meshPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
-        m_meshPipeline->setTopology(QRhiGraphicsPipeline::Triangles);
-        m_meshPipeline->setCullMode(QRhiGraphicsPipeline::None);
-        m_meshPipeline->setDepthTest(true);
-        m_meshPipeline->setDepthWrite(true);
-        m_meshPipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
-        m_meshPipeline->create();
+        pipe->setVertexInputLayout(inputLayout);
+        pipe->setShaderResourceBindings(m_dummyLayoutSrb);
+        pipe->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        pipe->setTopology(QRhiGraphicsPipeline::Triangles);
+        pipe->setCullMode(cullMode);
+        pipe->setFrontFace(QRhiGraphicsPipeline::CW);
+        pipe->setDepthTest(true);
+        pipe->setDepthWrite(true);
+        pipe->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
+        pipe->create();
+        return pipe;
+    };
+
+    if (!m_meshPipelineCullNone) {
+        m_meshPipelineCullNone = createMeshPipeline(QRhiGraphicsPipeline::None);
+    }
+    if (!m_meshPipelineCullBack) {
+        m_meshPipelineCullBack = createMeshPipeline(QRhiGraphicsPipeline::Back);
     }
 
     if (!m_linePipeline) {
@@ -119,6 +153,10 @@ void PmxRhiRenderer::initialize(QRhiCommandBuffer* cb) {
         m_linePipeline->setDepthWrite(true);
         m_linePipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
         m_linePipeline->create();
+    }
+
+    if (cb) {
+        cb->resourceUpdate(u);
     }
 
     buildGrid(cb);
@@ -175,6 +213,7 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
         m_syncedRevision = vp->modelRevision();
         m_stagedVertices.clear();
         m_stagedIndices.clear();
+        m_stagedMaterials.clear();
         m_stagedBoneLines.clear();
 
         if (vp->controller()) {
@@ -187,7 +226,8 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
                 mv.uv = v.uv;
                 m_stagedVertices.push_back(mv);
             }
-            m_stagedIndices = PmxViewportItem::filterValidTriangleIndices(doc.faceIndices, doc.vertices.size());
+
+            m_stagedMaterials = PmxViewportItem::partitionMaterialBatches(doc, m_stagedIndices);
 
             // Build bone overlay lines
             for (size_t bi = 0; bi < doc.bones.size(); ++bi) {
@@ -215,7 +255,9 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
                 m_stagedBoneLines.push_back({ bPos + glm::vec3(0,0,s), glm::vec4(0.2f, 0.2f, 1.0f, 1.0f) });
             }
         }
+
         m_meshDataDirty = true;
+        m_materialsDirty = true;
     }
 }
 
@@ -261,25 +303,113 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
         }
     }
 
+    if (m_materialsDirty || (m_gpuBatches.empty() && !m_stagedMaterials.empty())) {
+        m_materialsDirty = false;
+        for (auto& gb : m_gpuBatches) {
+            delete gb.srb;
+            delete gb.ubo;
+        }
+        m_gpuBatches.clear();
+
+        QRhiSampler* repSampler = m_textureCache.repeatSampler(rhi());
+        QRhiSampler* clmpSampler = m_textureCache.clampSampler(rhi());
+
+        for (const auto& staged : m_stagedMaterials) {
+            GpuMaterialBatch gb;
+            gb.staged = staged;
+
+            // Diffuse texture (Binding 1)
+            QRhiTexture* diffTex = nullptr;
+            if (!staged.diffuseTexturePath.isEmpty()) {
+                diffTex = m_textureCache.loadTexture(rhi(), staged.diffuseTexturePath, u);
+            }
+            if (!diffTex) {
+                diffTex = m_textureCache.defaultWhiteTexture(rhi(), u);
+            }
+
+            // Toon texture (Binding 2)
+            QRhiTexture* toonTex = nullptr;
+            if (staged.hasToon) {
+                if (staged.sharedToonIndex >= 0) {
+                    toonTex = m_textureCache.defaultToonTexture(rhi(), staged.sharedToonIndex, u);
+                } else if (!staged.toonTexturePath.isEmpty()) {
+                    toonTex = m_textureCache.loadTexture(rhi(), staged.toonTexturePath, u);
+                }
+            }
+            if (!toonTex) {
+                toonTex = m_textureCache.defaultToonTexture(rhi(), 0, u);
+            }
+
+            // Sphere texture (Binding 3)
+            QRhiTexture* sphTex = nullptr;
+            if (staged.sphereMode == 1 || staged.sphereMode == 2) {
+                if (!staged.sphereTexturePath.isEmpty()) {
+                    sphTex = m_textureCache.loadTexture(rhi(), staged.sphereTexturePath, u);
+                }
+            }
+            if (!sphTex) {
+                sphTex = m_textureCache.defaultWhiteTexture(rhi(), u);
+            }
+
+            gb.ubo = rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(FrameAndMaterialUboData));
+            gb.ubo->create();
+
+            gb.srb = rhi()->newShaderResourceBindings();
+            gb.srb->setBindings({
+                QRhiShaderResourceBinding::uniformBuffer(0, QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage, gb.ubo),
+                QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, diffTex, repSampler),
+                QRhiShaderResourceBinding::sampledTexture(2, QRhiShaderResourceBinding::FragmentStage, toonTex, clmpSampler),
+                QRhiShaderResourceBinding::sampledTexture(3, QRhiShaderResourceBinding::FragmentStage, sphTex, clmpSampler)
+            });
+            gb.srb->create();
+
+            m_gpuBatches.push_back(gb);
+        }
+    }
+
+    const QSize outputSize = renderTarget()->pixelSize();
+
     QMatrix4x4 corr = rhi()->clipSpaceCorrMatrix();
     const float* corrData = corr.constData();
     glm::mat4 corrMat;
     std::memcpy(&corrMat[0][0], corrData, 16 * sizeof(float));
     glm::mat4 mvp = corrMat * m_projMatrix * m_viewMatrix;
+    glm::mat4 normalMatrix = glm::transpose(glm::inverse(m_viewMatrix));
+    glm::vec4 lightDir = glm::normalize(m_viewMatrix * glm::vec4(0.5f, 1.0f, 0.5f, 0.0f));
 
-    FrameAndMaterialUboData meshData;
-    meshData.mvp = mvp;
-    meshData.modelView = m_viewMatrix;
-    meshData.normalMatrix = glm::transpose(glm::inverse(m_viewMatrix));
-    meshData.cameraPos = glm::vec4(m_eyePos, 1.0f);
-    meshData.lightDir = glm::normalize(m_viewMatrix * glm::vec4(0.5f, 1.0f, 0.5f, 0.0f));
-    u->updateDynamicBuffer(m_meshUbo, 0, sizeof(meshData), &meshData);
+    for (auto& gb : m_gpuBatches) {
+        FrameAndMaterialUboData uboData;
+        uboData.mvp = mvp;
+        uboData.modelView = m_viewMatrix;
+        uboData.normalMatrix = normalMatrix;
+        uboData.lightDir = lightDir;
+        uboData.lightColor = glm::vec4(0.6f, 0.6f, 0.6f, 1.0f);
+        uboData.cameraPos = glm::vec4(m_eyePos, 1.0f);
+
+        uboData.diffuse = gb.staged.diffuse;
+        uboData.specular = gb.staged.specular;
+        uboData.ambient = gb.staged.ambient;
+        uboData.edgeColor = gb.staged.edgeColor;
+        uboData.edgeParams = glm::vec4(
+            gb.staged.edgeSize,
+            static_cast<float>(outputSize.height()),
+            static_cast<float>(gb.staged.sphereMode),
+            gb.staged.hasToon ? 1.0f : 0.0f
+        );
+        uboData.texTintMul = glm::vec4(1.0f);
+        uboData.texTintAdd = glm::vec4(0.0f);
+        uboData.sphereTintMul = glm::vec4(1.0f);
+        uboData.sphereTintAdd = glm::vec4(0.0f);
+        uboData.toonTintMul = glm::vec4(1.0f);
+        uboData.toonTintAdd = glm::vec4(0.0f);
+
+        u->updateDynamicBuffer(gb.ubo, 0, sizeof(uboData), &uboData);
+    }
 
     LineUboData lineData;
     lineData.mvp = mvp;
     u->updateDynamicBuffer(m_lineUbo, 0, sizeof(lineData), &lineData);
 
-    const QSize outputSize = renderTarget()->pixelSize();
     cb->beginPass(renderTarget(), QColor::fromRgbF(0.145f, 0.145f, 0.16f, 1.0f), { 1.0f, 0 }, u);
     cb->setViewport(QRhiViewport(0, 0, outputSize.width(), outputSize.height()));
 
@@ -292,13 +422,23 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
         cb->draw(m_gridVertexCount);
     }
 
-    // 2. Mesh Triangles
-    if (m_meshVertexBuffer && m_meshIndexBuffer && m_meshIndexCount > 0 && m_meshPipeline) {
-        cb->setGraphicsPipeline(m_meshPipeline);
-        cb->setShaderResources(m_meshSrb);
+    // 2. Mesh Triangles (Partitioned per-material)
+    if (m_meshVertexBuffer && m_meshIndexBuffer && m_meshIndexCount > 0) {
         QRhiCommandBuffer::VertexInput vInput(m_meshVertexBuffer, 0);
         cb->setVertexInput(0, 1, &vInput, m_meshIndexBuffer, 0, QRhiCommandBuffer::IndexUInt32);
-        cb->drawIndexed(m_meshIndexCount);
+
+        for (const auto& gb : m_gpuBatches) {
+            if (gb.staged.indexCount == 0) continue;
+
+            QRhiGraphicsPipeline* pipeline = gb.staged.doubleSided
+                ? m_meshPipelineCullNone
+                : m_meshPipelineCullBack;
+            if (!pipeline) continue;
+
+            cb->setGraphicsPipeline(pipeline);
+            cb->setShaderResources(gb.srb);
+            cb->drawIndexed(gb.staged.indexCount, 1, gb.staged.indexOffset, 0);
+        }
     }
 
     // 3. Bone Overlay
@@ -358,6 +498,104 @@ std::vector<uint32_t> PmxViewportItem::filterValidTriangleIndices(const std::vec
     }
 
     return validIndices;
+}
+
+std::vector<StagedMaterialBatch> PmxViewportItem::partitionMaterialBatches(
+    const PmxDocument& doc,
+    std::vector<uint32_t>& outStagedIndices)
+{
+    outStagedIndices.clear();
+    std::vector<StagedMaterialBatch> batches;
+
+    if (doc.materials.empty()) {
+        outStagedIndices = filterValidTriangleIndices(doc.faceIndices, doc.vertices.size());
+        if (!outStagedIndices.empty()) {
+            StagedMaterialBatch b;
+            b.indexOffset = 0;
+            b.indexCount = static_cast<uint32_t>(outStagedIndices.size());
+            b.doubleSided = true;
+            b.hasToon = false;
+            batches.push_back(b);
+        }
+        return batches;
+    }
+
+    QFileInfo modelInfo(doc.sourceFilePath);
+    QDir modelDir = doc.sourceFilePath.isEmpty() ? QDir::current() : modelInfo.dir();
+
+    auto resolveTexturePath = [&](int32_t texIdx) -> QString {
+        if (texIdx < 0 || static_cast<size_t>(texIdx) >= doc.textures.size()) {
+            return QString();
+        }
+        QString raw = doc.textures[static_cast<size_t>(texIdx)].trimmed();
+        if (raw.isEmpty()) return QString();
+        QString clean = raw;
+        clean.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        if (QFileInfo(clean).isRelative()) {
+            return modelDir.absoluteFilePath(clean);
+        }
+        return clean;
+    };
+
+    size_t rawIndexOffset = 0;
+    const size_t totalRawIndices = doc.faceIndices.size();
+    const size_t totalVertices = doc.vertices.size();
+
+    for (size_t matIdx = 0; matIdx < doc.materials.size(); ++matIdx) {
+        const auto& mat = doc.materials[matIdx];
+        int32_t reqCount = mat.faceVertexCount;
+        if (reqCount < 0) reqCount = 0;
+
+        size_t availableCount = 0;
+        if (rawIndexOffset < totalRawIndices) {
+            availableCount = std::min(static_cast<size_t>(reqCount), totalRawIndices - rawIndexOffset);
+        }
+
+        std::vector<int32_t> matRawIndices;
+        if (availableCount >= 3) {
+            matRawIndices.assign(
+                doc.faceIndices.begin() + rawIndexOffset,
+                doc.faceIndices.begin() + rawIndexOffset + availableCount
+            );
+        }
+
+        std::vector<uint32_t> validForMat = filterValidTriangleIndices(matRawIndices, totalVertices);
+
+        StagedMaterialBatch batch;
+        batch.materialIndex = static_cast<int>(matIdx);
+        batch.indexOffset = static_cast<uint32_t>(outStagedIndices.size());
+        batch.indexCount = static_cast<uint32_t>(validForMat.size());
+        batch.doubleSided = (mat.drawFlags & 0x01) != 0;
+        batch.sphereMode = mat.sphereMode;
+        batch.diffuse = mat.diffuse;
+        batch.specular = glm::vec4(mat.specular, mat.specularPower);
+        batch.ambient = glm::vec4(mat.ambient, 1.0f);
+        batch.edgeColor = mat.edgeColor;
+        batch.edgeSize = mat.edgeSize;
+
+        // Diffuse texture
+        batch.diffuseTexturePath = resolveTexturePath(mat.textureIndex);
+
+        // Sphere texture
+        batch.sphereTexturePath = resolveTexturePath(mat.sphereTextureIndex);
+
+        // Toon texture
+        if (mat.sharedToonFlag != 0) {
+            batch.sharedToonIndex = mat.toonIndex;
+            batch.hasToon = (mat.toonIndex >= 0);
+        } else {
+            batch.sharedToonIndex = -1;
+            batch.toonTexturePath = resolveTexturePath(mat.toonIndex);
+            batch.hasToon = (mat.toonIndex >= 0 && !batch.toonTexturePath.isEmpty());
+        }
+
+        outStagedIndices.insert(outStagedIndices.end(), validForMat.begin(), validForMat.end());
+        batches.push_back(batch);
+
+        rawIndexOffset += availableCount;
+    }
+
+    return batches;
 }
 
 void PmxViewportItem::setController(pmx::PmxDocumentController* controller) {

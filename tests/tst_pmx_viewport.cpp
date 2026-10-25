@@ -12,6 +12,8 @@
 #include "models/PmxJointTableModel.h"
 #include "models/PmxUndoCommands.h"
 
+#include "viewport/PmxTextureCache.h"
+
 #include <QSignalSpy>
 #include <QTest>
 #include <QUndoCommand>
@@ -38,6 +40,10 @@ private slots:
     void testAppBridgeBatchOperationBoundaries();
     void testAppBridgeLanguageToggle();
     void testShaderResourcesLoaded();
+    void testSphereUVCalculation();
+    void testToonLookupMath();
+    void testTextureCacheFallbacks();
+    void testMaterialBatchPartitioning();
 };
 
 void tst_pmx_viewport::testCameraDefaults() {
@@ -561,6 +567,223 @@ void tst_pmx_viewport::testShaderResourcesLoaded() {
     QFile vertFile(QStringLiteral(":/shaders/mesh.vert.qsb"));
     QVERIFY(vertFile.open(QIODevice::ReadOnly));
     QVERIFY(vertFile.size() > 0);
+}
+
+void tst_pmx_viewport::testSphereUVCalculation() {
+    // MMD Sphere UV formula:
+    // u = 0.5 + 0.5 * normalView.x
+    // v = 0.5 - 0.5 * normalView.y
+
+    // Center / facing camera: normal = (0, 0, 1) or (0, 0, -1)
+    glm::vec2 uvCenter = PmxTextureCache::calculateSphereUV(glm::vec3(0.0f, 0.0f, 1.0f));
+    QCOMPARE(uvCenter.x, 0.5f);
+    QCOMPARE(uvCenter.y, 0.5f);
+
+    // Right: normal = (1, 0, 0)
+    glm::vec2 uvRight = PmxTextureCache::calculateSphereUV(glm::vec3(1.0f, 0.0f, 0.0f));
+    QCOMPARE(uvRight.x, 1.0f);
+    QCOMPARE(uvRight.y, 0.5f);
+
+    // Left: normal = (-1, 0, 0)
+    glm::vec2 uvLeft = PmxTextureCache::calculateSphereUV(glm::vec3(-1.0f, 0.0f, 0.0f));
+    QCOMPARE(uvLeft.x, 0.0f);
+    QCOMPARE(uvLeft.y, 0.5f);
+
+    // Up: normal = (0, 1, 0) -> v = 0.5 - 0.5(1) = 0.0 (top)
+    glm::vec2 uvUp = PmxTextureCache::calculateSphereUV(glm::vec3(0.0f, 1.0f, 0.0f));
+    QCOMPARE(uvUp.x, 0.5f);
+    QCOMPARE(uvUp.y, 0.0f);
+
+    // Down: normal = (0, -1, 0) -> v = 0.5 - 0.5(-1) = 1.0 (bottom)
+    glm::vec2 uvDown = PmxTextureCache::calculateSphereUV(glm::vec3(0.0f, -1.0f, 0.0f));
+    QCOMPARE(uvDown.x, 0.5f);
+    QCOMPARE(uvDown.y, 1.0f);
+
+    // Diagonal: normal = normalize(1, 1, 0)
+    glm::vec3 diag = glm::normalize(glm::vec3(1.0f, 1.0f, 0.0f));
+    glm::vec2 uvDiag = PmxTextureCache::calculateSphereUV(diag);
+    QVERIFY(std::abs(uvDiag.x - (0.5f + 0.5f * diag.x)) < 1e-5f);
+    QVERIFY(std::abs(uvDiag.y - (0.5f - 0.5f * diag.y)) < 1e-5f);
+}
+
+void tst_pmx_viewport::testToonLookupMath() {
+    // Formula: v = clamp(0.5 - 0.5 * (N . L), 0.0, 1.0)
+
+    // N . L = 1.0 (facing light directly, fully lit) -> v = 0.0
+    float vLit = PmxTextureCache::calculateToonV(1.0f);
+    QCOMPARE(vLit, 0.0f);
+    QCOMPARE(PmxTextureCache::calculateToonCoordinate(1.0f), 0.0f);
+
+    // N . L = 0.0 (perpendicular, terminator) -> v = 0.5
+    float vTerm = PmxTextureCache::calculateToonV(0.0f);
+    QCOMPARE(vTerm, 0.5f);
+    QCOMPARE(PmxTextureCache::calculateToonCoordinate(0.0f), 0.5f);
+
+    // N . L = -1.0 (facing completely away, shadow) -> v = 1.0
+    float vShadow = PmxTextureCache::calculateToonV(-1.0f);
+    QCOMPARE(vShadow, 1.0f);
+    QCOMPARE(PmxTextureCache::calculateToonCoordinate(-1.0f), 1.0f);
+
+    // Intermediate angles
+    float vHalfLit = PmxTextureCache::calculateToonV(0.5f);
+    QCOMPARE(vHalfLit, 0.25f);
+
+    float vHalfShadow = PmxTextureCache::calculateToonV(-0.5f);
+    QCOMPARE(vHalfShadow, 0.75f);
+
+    // Clamping on extreme values (overshoot / undershoot)
+    float vOver = PmxTextureCache::calculateToonV(2.5f);
+    QCOMPARE(vOver, 0.0f);
+
+    float vUnder = PmxTextureCache::calculateToonV(-3.0f);
+    QCOMPARE(vUnder, 1.0f);
+}
+
+void tst_pmx_viewport::testTextureCacheFallbacks() {
+    // 1. Verify default white image
+    QImage white = PmxTextureCache::createWhiteImage();
+    QVERIFY(!white.isNull());
+    QCOMPARE(white.width(), 1);
+    QCOMPARE(white.height(), 1);
+    QCOMPARE(white.pixelColor(0, 0), QColor(255, 255, 255, 255));
+
+    // 2. Verify all 10 programmatic toon textures (presets 0..9 corresponding to toon01..toon10)
+    std::vector<QImage> toonImages;
+    toonImages.reserve(10);
+    for (int t = 0; t < 10; ++t) {
+        QImage toon = PmxTextureCache::createToonImage(t);
+        QVERIFY(!toon.isNull());
+        QCOMPARE(toon.width(), 16);
+        QCOMPARE(toon.height(), 16);
+        QVERIFY(toon.bits() != nullptr);
+
+        // Verify vertical gradient: lit side at top (y=0) is lighter or equal to shadow side at bottom (y=15)
+        QColor litPixel = toon.pixelColor(8, 0);
+        QColor shadowPixel = toon.pixelColor(8, 15);
+        int litLum = litPixel.red() + litPixel.green() + litPixel.blue();
+        int shadowLum = shadowPixel.red() + shadowPixel.green() + shadowPixel.blue();
+        QVERIFY(litLum >= shadowLum);
+
+        toonImages.push_back(toon);
+    }
+
+    // 3. Specifically verify preset 0 (toon01) and preset 1 (toon02) are distinct (zero collision)
+    QVERIFY(toonImages[0] != toonImages[1]);
+    QCOMPARE(toonImages[0].pixelColor(8, 15), QColor(170, 170, 170)); // Neutral gray shadow
+    QCOMPARE(toonImages[1].pixelColor(8, 15), QColor(230, 195, 185)); // Warm skin shadow
+
+    // Verify all 10 presets (0..9) are distinct
+    for (size_t i = 0; i < toonImages.size(); ++i) {
+        for (size_t j = i + 1; j < toonImages.size(); ++j) {
+            QVERIFY2(toonImages[i] != toonImages[j],
+                     qPrintable(QString("Presets %1 and %2 must be distinct").arg(i).arg(j)));
+        }
+    }
+
+    // 4. Verify boundary fallbacks (out of 0..9 range falls back to preset 0)
+    QImage toonUnderflow = PmxTextureCache::createToonImage(-5);
+    QCOMPARE(toonUnderflow, toonImages[0]);
+
+    QImage toonOverflow = PmxTextureCache::createToonImage(10);
+    QCOMPARE(toonOverflow, toonImages[0]);
+
+    QImage toonLargeOverflow = PmxTextureCache::createToonImage(99);
+    QCOMPARE(toonLargeOverflow, toonImages[0]);
+}
+
+void tst_pmx_viewport::testMaterialBatchPartitioning() {
+    PmxDocument doc;
+    // 4 Vertices
+    for (int i = 0; i < 4; ++i) {
+        PmxVertex v;
+        v.position = glm::vec3(static_cast<float>(i), 0.0f, 0.0f);
+        doc.vertices.push_back(v);
+    }
+
+    // 12 Face Indices (4 triangles)
+    // Triangle 0: (0, 1, 2)
+    // Triangle 1: (2, 1, 3)
+    // Triangle 2: (0, 2, 3)
+    // Triangle 3: (1, 2, 0)
+    doc.faceIndices = { 0, 1, 2,  2, 1, 3,  0, 2, 3,  1, 2, 0 };
+
+    // Material 0: 6 indices (2 triangles)
+    PmxMaterial m0;
+    m0.nameJp = QStringLiteral("Mat0");
+    m0.faceVertexCount = 6;
+    m0.drawFlags = 0x01; // DoubleSided
+    m0.sphereMode = 1;   // Mul
+    m0.sharedToonFlag = 1;
+    m0.toonIndex = 0;
+    doc.materials.push_back(m0);
+
+    // Material 1: 6 indices (2 triangles)
+    PmxMaterial m1;
+    m1.nameJp = QStringLiteral("Mat1");
+    m1.faceVertexCount = 6;
+    m1.drawFlags = 0x00; // Back cull
+    m1.sphereMode = 2;   // Add
+    m1.sharedToonFlag = 0;
+    m1.toonIndex = -1;
+    doc.materials.push_back(m1);
+
+    std::vector<uint32_t> stagedIndices;
+    auto batches = PmxViewportItem::partitionMaterialBatches(doc, stagedIndices);
+
+    QCOMPARE(batches.size(), 2u);
+    QCOMPARE(stagedIndices.size(), 12u);
+
+    // Batch 0
+    QCOMPARE(batches[0].indexOffset, 0u);
+    QCOMPARE(batches[0].indexCount, 6u);
+    QVERIFY(batches[0].doubleSided);
+    QCOMPARE(batches[0].sphereMode, 1);
+    QVERIFY(batches[0].hasToon);
+    QCOMPARE(batches[0].sharedToonIndex, 0);
+    QVERIFY(batches[0].indexOffset + batches[0].indexCount <= stagedIndices.size());
+
+    // Batch 1
+    QCOMPARE(batches[1].indexOffset, 6u);
+    QCOMPARE(batches[1].indexCount, 6u);
+    QVERIFY(!batches[1].doubleSided);
+    QCOMPARE(batches[1].sphereMode, 2);
+    QVERIFY(!batches[1].hasToon);
+    QVERIFY(batches[1].indexOffset + batches[1].indexCount <= stagedIndices.size());
+
+    // Test corrupted index filtering within material partitions:
+    // Make index 4 out-of-bounds (vertex index 99) in triangle 1 of Material 0
+    doc.faceIndices[4] = 99;
+    std::vector<uint32_t> stagedCorrupt;
+    auto batchesCorrupt = PmxViewportItem::partitionMaterialBatches(doc, stagedCorrupt);
+
+    QCOMPARE(batchesCorrupt.size(), 2u);
+    // Material 0 lost 1 invalid triangle (3 indices), keeping 3 valid indices
+    QCOMPARE(batchesCorrupt[0].indexOffset, 0u);
+    QCOMPARE(batchesCorrupt[0].indexCount, 3u);
+
+    // Material 1 still has its 6 valid indices starting right after Material 0
+    QCOMPARE(batchesCorrupt[1].indexOffset, 3u);
+    QCOMPARE(batchesCorrupt[1].indexCount, 6u);
+    QCOMPARE(stagedCorrupt.size(), 9u);
+
+    // Index buffer bounds invariant holds strictly:
+    for (const auto& b : batchesCorrupt) {
+        QVERIFY(b.indexOffset + b.indexCount <= stagedCorrupt.size());
+    }
+
+    // Boundary: excess materials with no remaining indices
+    PmxMaterial mExcess;
+    mExcess.nameJp = QStringLiteral("MatExcess");
+    mExcess.faceVertexCount = 100;
+    doc.materials.push_back(mExcess);
+
+    std::vector<uint32_t> stagedExcess;
+    auto batchesExcess = PmxViewportItem::partitionMaterialBatches(doc, stagedExcess);
+    QCOMPARE(batchesExcess.size(), 3u);
+    QCOMPARE(batchesExcess[2].indexCount, 0u);
+    for (const auto& b : batchesExcess) {
+        QVERIFY(b.indexOffset + b.indexCount <= stagedExcess.size());
+    }
 }
 
 QTEST_MAIN(tst_pmx_viewport)

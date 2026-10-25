@@ -1,6 +1,7 @@
 #pragma once
 
 #include "viewport/PmxCamera.h"
+#include "viewport/PmxTextureCache.h"
 #include "models/PmxDocumentController.h"
 
 #include <QtQuick/qquickrhiitem.h>
@@ -13,6 +14,24 @@
 namespace pmx {
 
 class PmxViewportItem;
+
+struct StagedMaterialBatch {
+    int materialIndex = -1;
+    uint32_t indexOffset = 0;
+    uint32_t indexCount = 0;
+    bool doubleSided = false;
+    uint8_t sphereMode = 0;
+    bool hasToon = false;
+    int sharedToonIndex = -1;
+    QString diffuseTexturePath;
+    QString sphereTexturePath;
+    QString toonTexturePath;
+    glm::vec4 diffuse{1.0f};
+    glm::vec4 specular{0.0f, 0.0f, 0.0f, 5.0f};
+    glm::vec4 ambient{0.5f, 0.5f, 0.5f, 1.0f};
+    glm::vec4 edgeColor{0.0f, 0.0f, 0.0f, 1.0f};
+    float edgeSize = 1.0f;
+};
 
 class PmxRhiRenderer : public QQuickRhiItemRenderer {
 public:
@@ -61,11 +80,18 @@ private:
         glm::mat4 mvp{1.0f};
     };
 
-    QRhiBuffer* m_meshUbo = nullptr;
+    struct GpuMaterialBatch {
+        StagedMaterialBatch staged;
+        QRhiBuffer* ubo = nullptr;
+        QRhiShaderResourceBindings* srb = nullptr;
+    };
+
+    QRhiBuffer* m_dummyLayoutUbo = nullptr;
+    QRhiShaderResourceBindings* m_dummyLayoutSrb = nullptr;
     QRhiBuffer* m_lineUbo = nullptr;
-    QRhiShaderResourceBindings* m_meshSrb = nullptr;
     QRhiShaderResourceBindings* m_lineSrb = nullptr;
-    QRhiGraphicsPipeline* m_meshPipeline = nullptr;
+    QRhiGraphicsPipeline* m_meshPipelineCullNone = nullptr;
+    QRhiGraphicsPipeline* m_meshPipelineCullBack = nullptr;
     QRhiGraphicsPipeline* m_linePipeline = nullptr;
 
     QRhiBuffer* m_meshVertexBuffer = nullptr;
@@ -80,8 +106,13 @@ private:
 
     std::vector<MeshVertex> m_stagedVertices;
     std::vector<uint32_t> m_stagedIndices;
+    std::vector<StagedMaterialBatch> m_stagedMaterials;
+    std::vector<GpuMaterialBatch> m_gpuBatches;
     std::vector<LineVertex> m_stagedBoneLines;
     bool m_meshDataDirty = false;
+    bool m_materialsDirty = false;
+
+    PmxTextureCache m_textureCache;
 
     glm::mat4 m_viewMatrix{1.0f};
     glm::mat4 m_projMatrix{1.0f};
@@ -109,6 +140,7 @@ public:
     QQuickRhiItemRenderer* createRenderer() override;
 
     static std::vector<uint32_t> filterValidTriangleIndices(const std::vector<int32_t>& rawIndices, size_t vertexCount);
+    static std::vector<StagedMaterialBatch> partitionMaterialBatches(const PmxDocument& doc, std::vector<uint32_t>& outStagedIndices);
 
     pmx::PmxDocumentController* controller() const { return m_controller; }
     void setController(pmx::PmxDocumentController* controller);
