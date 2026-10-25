@@ -148,6 +148,7 @@ private:
     std::vector<LineVertex> m_stagedBrushCursorLines;
     bool m_meshDataDirty = false;
     bool m_materialsDirty = false;
+    bool m_indicesDirty = false;
     bool m_gizmoDirty = false;
     bool m_heatmapDirty = false;
     bool m_brushCursorDirty = false;

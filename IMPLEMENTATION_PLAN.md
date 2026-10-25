@@ -147,8 +147,8 @@ Transform ZenPMX into an interactive posing and animation preview suite (`Transf
 | **Ticket 4.4** | **Real-Time Bullet3 Physics Simulation & 6DoF Spring Constraints** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1 | `121ea4d` |
 | **Ticket 4.5** | **VMD (`.vmd`) Motion & VPD (`.vpd`) Pose File Importer and Playback Engine** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.1 | `8fa77f5` |
 | **Ticket 4.6** | **TransformView Viewport Integration & Interactive Timeline Controls** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[DONE]` | Tickets 4.2–4.5 | `7c0ce9a` |
-| **Ticket 4.7** | **Core Evaluator Physics Alignment to Animated Bones** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[IN_PROGRESS]` | Ticket 4.6 | Pending |
-| **Ticket 4.8** | **TransformView Viewport Playback, Dynamic VBO & TimelineBar Hardening** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[TODO]` | Ticket 4.7 | Pending |
+| **Ticket 4.7** | **Core Evaluator Physics Alignment to Animated Bones** | `PmxEvaluator` | `pmx_core_systems_engineer` | `[DONE]` | Ticket 4.6 | `1dc196b` |
+| **Ticket 4.8** | **TransformView Viewport Playback, Dynamic VBO & TimelineBar Hardening** | `PmxViewport` / `pmx-editor` | `pmx_ui_engineer` | `[DONE]` | Ticket 4.7 | Pending |
 
 ### Detailed Ticket Breakdown for Milestone 4:
 

@@ -884,6 +884,8 @@
   2. **Verification Suite (`tests/tst_pmx_evaluator.cpp`):**
      - Add `testDynamicRigidBodiesAlignToAnimatedBones`: Load `Barbara.pmx`, enable physics, apply `Motion 1.vmd` frame 0; verify that skirt bones and skirt rigid bodies move with the hips and legs (e.g. $X \neq 0$, distance to origin $> 1.0$), eliminating the "de-pantsed" detachment glitch.
 * **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_evaluator`
+* **Status:** `[DONE]` (Committed at `1dc196b`)
+* **Adversarial QA Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 19:40 UTC).
 
 ---
 
@@ -891,19 +893,20 @@
 * **Assigned Subagent:** `pmx_ui_engineer`
 * **Target Subsystems:** `PmxViewport` & `pmx-editor` (`src/viewport/PmxViewportItem.h/.cpp`, `src/app/qml/TimelineBar.qml`, `tests/tst_pmx_viewport.cpp`)
 * **Date Issued:** 2026-10-25 19:30 UTC
-* **Status:** `[TODO]`
+* **Status:** `[DONE]` (Audited & Verified; Pending DevOps commit)
 * **Specification & Architectural Invariants:**
   1. **Dynamic VBO & Playback Timer Hardening (`PmxViewportItem.h/.cpp`):**
-     - In `PmxRhiRenderer::render`: Allocate `m_meshVertexBuffer` with `QRhiBuffer::Dynamic` instead of `QRhiBuffer::Immutable`.
+     - In `PmxRhiRenderer::render`: Allocate `m_meshVertexBuffer` with `QRhiBuffer::Dynamic` instead of `QRhiBuffer::Immutable` and update with `updateDynamicBuffer`.
+     - In `onPlaybackTick()`: Fix `QElapsedTimer` delta calculation by using `nsecsElapsed() * 1e-9f` (previously treating milliseconds as nanoseconds, running 1,000,000x too slow).
      - In `loadVmdMotion`, `loadVpdPose`, `setCurrentFrame`, `resetPose`, `resetPhysics`: Call `m_runtimeScene.resetPhysicsToBones()`.
      - In `play()`: Ensure `m_runtimeRevision++` is incremented, timer started, and `currentFrame` updates emitted.
-     - In `onPlaybackTick()`: Ensure `m_animationPlayer.update(deltaTime)` advances `m_currentFrame`, calls `m_runtimeScene.evaluate(deltaTime)`, updates `m_runtimeRevision++`, and emits `currentFrameChanged()`.
   2. **TimelineBar QML Hardening (`TimelineBar.qml`):**
      - Type `viewportItem` cleanly as `property QtObject viewportItem: null`.
-     - Add explicit `Connections { target: root.viewportItem; function onPlayingChanged() { ... } function onCurrentFrameChanged() { ... } }` to ensure reliable reactive UI state.
+     - Add explicit `Connections { target: root.viewportItem; function onPlayingChanged() { ... } function onCurrentFrameChanged() { ... } function onMaxFrameChanged() { ... } }` to ensure reliable reactive UI state without feedback loops with `Slider` or `SpinBox`.
   3. **Verification Suite (`tests/tst_pmx_viewport.cpp`):**
-     - Add `testAnimationPlaybackTimerAdvancesFrames`: Load motion, call `viewport.play()`, execute `QTest::qWait(100)`, verify that `viewport.currentFrame() > 0.0f`, `viewport.isPlaying() == true`, and `viewport.runtimeRevision()` has advanced.
+     - Add `testAnimationPlaybackTimerAdvancesFrames`: Load motion, call `viewport.play()`, execute `QTest::qWait(100)`, verify that `viewport.currentFrame() > 0.5f`, `viewport.isPlaying() == true`, and `viewport.runtimeRevision()` has advanced.
 * **Verification Command:** `cmake --build build -j$(nproc) && ctest --test-dir build --output-on-failure && ./build/tests/tst_pmx_viewport`
+* **Adversarial QA Audit Verdict:** `PASS` (Audited by `pmx_qa_adversary` on 2026-10-25 20:01 UTC; 54/54 viewport tests pass, 8/8 CTest pass clean under ASan/UBSan).
 
 ---
 

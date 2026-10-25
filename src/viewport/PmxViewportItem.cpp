@@ -349,6 +349,7 @@ void PmxRhiRenderer::synchronize(QQuickRhiItem* item) {
             if (docDirty || transformViewChanged || m_stagedMaterials.empty()) {
                 m_stagedMaterials = PmxViewportItem::partitionMaterialBatches(doc, m_stagedIndices);
                 m_materialsDirty = true;
+                m_indicesDirty = true;
             }
 
             if (m_syncedTransformViewMode) {
@@ -400,33 +401,36 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
             quint32 vSize = static_cast<quint32>(m_stagedVertices.size() * sizeof(MeshVertex));
             if (!m_meshVertexBuffer || m_meshVertexBuffer->size() != vSize) {
                 delete m_meshVertexBuffer;
-                m_meshVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, vSize);
+                m_meshVertexBuffer = rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer, vSize);
                 m_meshVertexBuffer->create();
             }
-            u->uploadStaticBuffer(m_meshVertexBuffer, 0, vSize, m_stagedVertices.data());
+            u->updateDynamicBuffer(m_meshVertexBuffer, 0, vSize, m_stagedVertices.data());
         }
 
-        if (!m_stagedIndices.empty()) {
-            quint32 iSize = static_cast<quint32>(m_stagedIndices.size() * sizeof(uint32_t));
-            if (!m_meshIndexBuffer || m_meshIndexBuffer->size() != iSize) {
-                delete m_meshIndexBuffer;
-                m_meshIndexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::IndexBuffer, iSize);
-                m_meshIndexBuffer->create();
+        if (m_indicesDirty || !m_meshIndexBuffer) {
+            m_indicesDirty = false;
+            if (!m_stagedIndices.empty()) {
+                quint32 iSize = static_cast<quint32>(m_stagedIndices.size() * sizeof(uint32_t));
+                if (!m_meshIndexBuffer || m_meshIndexBuffer->size() != iSize) {
+                    delete m_meshIndexBuffer;
+                    m_meshIndexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::IndexBuffer, iSize);
+                    m_meshIndexBuffer->create();
+                }
+                u->uploadStaticBuffer(m_meshIndexBuffer, 0, iSize, m_stagedIndices.data());
+                m_meshIndexCount = static_cast<quint32>(m_stagedIndices.size());
+            } else {
+                m_meshIndexCount = 0;
             }
-            u->uploadStaticBuffer(m_meshIndexBuffer, 0, iSize, m_stagedIndices.data());
-            m_meshIndexCount = static_cast<quint32>(m_stagedIndices.size());
-        } else {
-            m_meshIndexCount = 0;
         }
 
         if (!m_stagedBoneLines.empty()) {
             quint32 bSize = static_cast<quint32>(m_stagedBoneLines.size() * sizeof(LineVertex));
             if (!m_boneVertexBuffer || m_boneVertexBuffer->size() != bSize) {
                 delete m_boneVertexBuffer;
-                m_boneVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, bSize);
+                m_boneVertexBuffer = rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer, bSize);
                 m_boneVertexBuffer->create();
             }
-            u->uploadStaticBuffer(m_boneVertexBuffer, 0, bSize, m_stagedBoneLines.data());
+            u->updateDynamicBuffer(m_boneVertexBuffer, 0, bSize, m_stagedBoneLines.data());
             m_boneVertexCount = static_cast<quint32>(m_stagedBoneLines.size());
         } else {
             m_boneVertexCount = 0;
@@ -436,10 +440,10 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
             quint32 pSize = static_cast<quint32>(m_stagedPhysicsLines.size() * sizeof(LineVertex));
             if (!m_physicsVertexBuffer || m_physicsVertexBuffer->size() != pSize) {
                 delete m_physicsVertexBuffer;
-                m_physicsVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, pSize);
+                m_physicsVertexBuffer = rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer, pSize);
                 m_physicsVertexBuffer->create();
             }
-            u->uploadStaticBuffer(m_physicsVertexBuffer, 0, pSize, m_stagedPhysicsLines.data());
+            u->updateDynamicBuffer(m_physicsVertexBuffer, 0, pSize, m_stagedPhysicsLines.data());
             m_physicsVertexCount = static_cast<quint32>(m_stagedPhysicsLines.size());
         } else {
             m_physicsVertexCount = 0;
@@ -449,10 +453,10 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
             quint32 jSize = static_cast<quint32>(m_stagedJointLines.size() * sizeof(LineVertex));
             if (!m_jointVertexBuffer || m_jointVertexBuffer->size() != jSize) {
                 delete m_jointVertexBuffer;
-                m_jointVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, jSize);
+                m_jointVertexBuffer = rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer, jSize);
                 m_jointVertexBuffer->create();
             }
-            u->uploadStaticBuffer(m_jointVertexBuffer, 0, jSize, m_stagedJointLines.data());
+            u->updateDynamicBuffer(m_jointVertexBuffer, 0, jSize, m_stagedJointLines.data());
             m_jointVertexCount = static_cast<quint32>(m_stagedJointLines.size());
         } else {
             m_jointVertexCount = 0;
@@ -465,10 +469,10 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
             quint32 gSize = static_cast<quint32>(m_stagedGizmoLines.size() * sizeof(LineVertex));
             if (!m_gizmoVertexBuffer || m_gizmoVertexBuffer->size() != gSize) {
                 delete m_gizmoVertexBuffer;
-                m_gizmoVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, gSize);
+                m_gizmoVertexBuffer = rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer, gSize);
                 m_gizmoVertexBuffer->create();
             }
-            u->uploadStaticBuffer(m_gizmoVertexBuffer, 0, gSize, m_stagedGizmoLines.data());
+            u->updateDynamicBuffer(m_gizmoVertexBuffer, 0, gSize, m_stagedGizmoLines.data());
             m_gizmoVertexCount = static_cast<quint32>(m_stagedGizmoLines.size());
         } else {
             m_gizmoVertexCount = 0;
@@ -481,10 +485,10 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
             quint32 hSize = static_cast<quint32>(m_stagedHeatmapVertices.size() * sizeof(LineVertex));
             if (!m_heatmapVertexBuffer || m_heatmapVertexBuffer->size() != hSize) {
                 delete m_heatmapVertexBuffer;
-                m_heatmapVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, hSize);
+                m_heatmapVertexBuffer = rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer, hSize);
                 m_heatmapVertexBuffer->create();
             }
-            u->uploadStaticBuffer(m_heatmapVertexBuffer, 0, hSize, m_stagedHeatmapVertices.data());
+            u->updateDynamicBuffer(m_heatmapVertexBuffer, 0, hSize, m_stagedHeatmapVertices.data());
             m_heatmapVertexCount = static_cast<quint32>(m_stagedHeatmapVertices.size());
         } else {
             m_heatmapVertexCount = 0;
@@ -497,10 +501,10 @@ void PmxRhiRenderer::render(QRhiCommandBuffer* cb) {
             quint32 cSize = static_cast<quint32>(m_stagedBrushCursorLines.size() * sizeof(LineVertex));
             if (!m_brushCursorVertexBuffer || m_brushCursorVertexBuffer->size() != cSize) {
                 delete m_brushCursorVertexBuffer;
-                m_brushCursorVertexBuffer = rhi()->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, cSize);
+                m_brushCursorVertexBuffer = rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer, cSize);
                 m_brushCursorVertexBuffer->create();
             }
-            u->uploadStaticBuffer(m_brushCursorVertexBuffer, 0, cSize, m_stagedBrushCursorLines.data());
+            u->updateDynamicBuffer(m_brushCursorVertexBuffer, 0, cSize, m_stagedBrushCursorLines.data());
             m_brushCursorVertexCount = static_cast<quint32>(m_stagedBrushCursorLines.size());
         } else {
             m_brushCursorVertexCount = 0;
@@ -1007,6 +1011,7 @@ void PmxViewportItem::setCurrentFrame(float frame) {
     }
     m_animationPlayer.setFrame(frame);
     m_animationPlayer.applyToScene(m_runtimeScene);
+    m_runtimeScene.resetPhysicsToBones();
     m_runtimeScene.evaluate(0.0f);
     m_runtimeRevision++;
     emit currentFrameChanged();
@@ -1051,6 +1056,7 @@ void PmxViewportItem::setTransformViewMode(bool enabled) {
                 m_runtimeScene.setPhysicsEnabled(m_physicsEnabled);
             }
             m_animationPlayer.applyToScene(m_runtimeScene);
+            m_runtimeScene.resetPhysicsToBones();
             m_runtimeScene.evaluate(0.0f);
             m_runtimeRevision++;
         } else {
@@ -1082,6 +1088,7 @@ bool PmxViewportItem::loadVmdMotion(const QString& filePath) {
     emit playingChanged();
 
     m_animationPlayer.applyToScene(m_runtimeScene);
+    m_runtimeScene.resetPhysicsToBones();
     m_runtimeScene.evaluate(0.0f);
     m_runtimeRevision++;
     update();
@@ -1107,6 +1114,7 @@ bool PmxViewportItem::loadVpdPose(const QString& filePath) {
     emit playingChanged();
 
     m_animationPlayer.applyToScene(m_runtimeScene);
+    m_runtimeScene.resetPhysicsToBones();
     m_runtimeScene.evaluate(0.0f);
     m_runtimeRevision++;
     update();
@@ -1116,9 +1124,10 @@ bool PmxViewportItem::loadVpdPose(const QString& filePath) {
 void PmxViewportItem::play() {
     m_animationPlayer.play();
     m_elapsedTimer.restart();
-    if (m_playbackTimer) {
+    if (m_playbackTimer && !m_playbackTimer->isActive()) {
         m_playbackTimer->start();
     }
+    m_runtimeRevision++;
     emit playingChanged();
     update();
 }
@@ -1137,6 +1146,7 @@ void PmxViewportItem::stop() {
         m_playbackTimer->stop();
     }
     m_animationPlayer.applyToScene(m_runtimeScene);
+    m_runtimeScene.resetPhysicsToBones();
     m_runtimeScene.evaluate(0.0f);
     m_runtimeRevision++;
     emit playingChanged();
@@ -1146,6 +1156,7 @@ void PmxViewportItem::stop() {
 
 void PmxViewportItem::resetPhysics() {
     m_runtimeScene.resetPhysics();
+    m_runtimeScene.resetPhysicsToBones();
     m_runtimeScene.evaluate(0.0f);
     m_runtimeRevision++;
     update();
@@ -1156,7 +1167,7 @@ void PmxViewportItem::resetPose() {
     for (int i = 0; i < m_runtimeScene.morphCount(); ++i) {
         m_runtimeScene.setMorphWeight(i, 0.0f);
     }
-    m_runtimeScene.resetPhysics();
+    m_runtimeScene.resetPhysicsToBones();
     m_runtimeScene.evaluate(0.0f);
     m_runtimeRevision++;
     update();
@@ -1168,7 +1179,8 @@ void PmxViewportItem::onPlaybackTick() {
         emit playingChanged();
         return;
     }
-    qint64 elapsedNs = m_elapsedTimer.restart();
+    qint64 elapsedNs = m_elapsedTimer.nsecsElapsed();
+    m_elapsedTimer.restart();
     float deltaTime = static_cast<float>(elapsedNs) * 1e-9f;
     if (deltaTime <= 0.0f || deltaTime > 0.1f) {
         deltaTime = 1.0f / 60.0f;

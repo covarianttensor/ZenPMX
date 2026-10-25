@@ -91,6 +91,7 @@ private slots:
     void testTransformViewVmdAndVpdLoading();
     void testTransformViewBoundarySafety();
     void testTransformViewMaterialMorphSyncAndRestoration();
+    void testAnimationPlaybackTimerAdvancesFrames();
 };
 
 void tst_pmx_viewport::testCameraDefaults() {
@@ -3001,6 +3002,70 @@ void tst_pmx_viewport::testTransformViewMaterialMorphSyncAndRestoration() {
     QCOMPARE(restoredBatch.texTintMul, glm::vec4(1.0f));
     QCOMPARE(restoredBatch.sphereTintMul, glm::vec4(1.0f));
     QCOMPARE(restoredBatch.toonTintMul, glm::vec4(1.0f));
+}
+
+void tst_pmx_viewport::testAnimationPlaybackTimerAdvancesFrames() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    // Create and write a test VMD with 60 frames
+    VmdMotion motion;
+    motion.version = "Vocaloid Motion Data 0002";
+    motion.modelName = "TestModel";
+    motion.maxFrame = 60;
+    VmdBoneKeyframe bk0;
+    bk0.boneName = "Root";
+    bk0.frame = 0;
+    bk0.translation = glm::vec3(0.0f);
+    motion.boneKeyframes.push_back(bk0);
+
+    VmdBoneKeyframe bk1;
+    bk1.boneName = "Root";
+    bk1.frame = 60;
+    bk1.translation = glm::vec3(10.0f, 0.0f, 0.0f);
+    motion.boneKeyframes.push_back(bk1);
+
+    QString vmdPath = tempDir.filePath("motion60.vmd");
+    QString vmdErr;
+    QVERIFY(VmdImporter::writeToFile(vmdPath, motion, &vmdErr));
+
+    // Set up PmxViewportItem with controller and bone
+    PmxDocument doc;
+    PmxBone b;
+    b.nameJp = "Root";
+    doc.bones.push_back(b);
+    PmxDocumentController controller;
+    controller.setDocumentInternal(doc);
+    controller.resetAllModels();
+
+    PmxViewportItem viewport;
+    viewport.setController(&controller);
+    viewport.setTransformViewMode(true);
+
+    // Load test VMD motion with 60 frames
+    QVERIFY(viewport.loadVmdMotion(vmdPath));
+    QCOMPARE(viewport.maxFrame(), 60);
+    QCOMPARE(viewport.currentFrame(), 0.0f);
+
+    // Call viewport.play()
+    viewport.play();
+    // Verify viewport.isPlaying() == true
+    QCOMPARE(viewport.isPlaying(), true);
+
+    // Execute QTest::qWait(100); (allowing QTimer to fire ~6 ticks in the event loop)
+    QTest::qWait(100);
+
+    // Verify viewport.currentFrame() > 0.5f
+    QVERIFY(viewport.currentFrame() > 0.5f);
+    // Verify viewport.runtimeRevision() > 1
+    QVERIFY(viewport.runtimeRevision() > 1);
+    // Verify viewport.isPlaying() == true
+    QCOMPARE(viewport.isPlaying(), true);
+
+    // Call viewport.pause()
+    viewport.pause();
+    // Verify viewport.isPlaying() == false
+    QCOMPARE(viewport.isPlaying(), false);
 }
 
 QTEST_MAIN(tst_pmx_viewport)

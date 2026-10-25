@@ -10,7 +10,31 @@ Rectangle {
     border.color: "#3a3a3d"
     border.width: 1
 
-    property var viewportItem: null
+    property QtObject viewportItem: null
+
+    Connections {
+        target: root.viewportItem
+        function onPlayingChanged() {
+            if (root.viewportItem) {
+                playBtn.enabled = !root.viewportItem.isPlaying
+                pauseBtn.enabled = root.viewportItem.isPlaying
+            }
+        }
+        function onCurrentFrameChanged() {
+            if (root.viewportItem) {
+                if (!frameSlider.pressed) {
+                    frameSlider.value = root.viewportItem.currentFrame
+                }
+                frameSpinBox.value = Math.round(root.viewportItem.currentFrame)
+            }
+        }
+        function onMaxFrameChanged() {
+            if (root.viewportItem && root.viewportItem.maxFrame > 0) {
+                frameSlider.to = root.viewportItem.maxFrame
+                frameSpinBox.to = root.viewportItem.maxFrame
+            }
+        }
+    }
 
     FileDialog {
         id: vmdDialog
